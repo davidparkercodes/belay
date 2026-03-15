@@ -1,0 +1,67 @@
+version: "3"
+
+vars:
+  BINARY: belay
+  BUILD_DIR: bin
+
+tasks:
+  build:
+    desc: Build the belay binary
+    cmds:
+      - go build -o {{.BUILD_DIR}}/{{.BINARY}} ./cmd/belay
+    sources:
+      - "**/*.go"
+      - go.mod
+    generates:
+      - "{{.BUILD_DIR}}/{{.BINARY}}"
+
+  run:
+    desc: Build and run belay
+    deps: [build]
+    cmds:
+      - ./{{.BUILD_DIR}}/{{.BINARY}} {{.CLI_ARGS}}
+
+  test:
+    desc: Run all tests
+    cmds:
+      - go test ./... -v
+
+  test:cover:
+    desc: Run tests with coverage
+    cmds:
+      - go test ./... -coverprofile=coverage.out
+      - go tool cover -html=coverage.out -o coverage.html
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -rf {{.BUILD_DIR}}
+      - rm -f coverage.out coverage.html
+
+  install:
+    desc: Install belay to GOPATH/bin
+    cmds:
+      - go install ./cmd/belay
+
+  lint:
+    desc: Run linters
+    cmds:
+      - go vet ./...
+
+  ui:dev:
+    desc: Start the dashboard UI dev server
+    dir: frontend
+    cmds:
+      - npm run dev
+
+  ui:build:
+    desc: Build the dashboard UI for production
+    dir: frontend
+    cmds:
+      - npm run build
+
+  ui:install:
+    desc: Install frontend dependencies
+    dir: frontend
+    cmds:
+      - npm install

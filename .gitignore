@@ -1,0 +1,27 @@
+# Binaries
+bin/
+*.exe
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Belay data (don't commit tracked data)
+.belay/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/dev-dist/
+
+# Go
+vendor/
+
+# Test coverage
+coverage.txt
+*.cover

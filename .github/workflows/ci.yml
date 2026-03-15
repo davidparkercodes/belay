@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        go-version: ['1.24']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+      - name: Build
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            CGO_ENABLED=1 go build -o bin/belay ./cmd/belay
+          else
+            CGO_ENABLED=0 go build -o bin/belay${{ runner.os == 'Windows' && '.exe' || '' }} ./cmd/belay
+          fi
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            go test ./... -v -race -coverprofile=coverage.txt
+          else
+            CGO_ENABLED=0 go test ./... -v -coverprofile=coverage.txt
+          fi
+      - name: Upload coverage
+        if: matrix.os == 'ubuntu-latest'
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.txt
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest

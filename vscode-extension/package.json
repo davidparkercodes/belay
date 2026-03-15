@@ -1,0 +1,89 @@
+{
+  "name": "belay",
+  "displayName": "Belay",
+  "description": "AI-aware local version control - see which AI session changed every file",
+  "version": "1.0.0",
+  "publisher": "davidparkercodes",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "SCM Providers",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "belay",
+          "title": "Belay",
+          "icon": "$(shield)"
+        }
+      ]
+    },
+    "views": {
+      "belay": [
+        {
+          "id": "belay-timeline",
+          "name": "Recent Changes"
+        },
+        {
+          "id": "belay-sessions",
+          "name": "Sessions"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "belay.refresh",
+        "title": "Belay: Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "belay.showFileHistory",
+        "title": "Belay: Show File History"
+      },
+      {
+        "command": "belay.restoreFile",
+        "title": "Belay: Restore File to Version"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "belay.refresh",
+          "when": "view == belay-timeline || view == belay-sessions",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "belay.showFileHistory",
+          "when": "view == belay-timeline && viewItem == event",
+          "group": "belay@1"
+        },
+        {
+          "command": "belay.restoreFile",
+          "when": "view == belay-timeline && viewItem == event",
+          "group": "belay@2"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  }
+}
