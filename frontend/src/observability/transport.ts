@@ -3,29 +3,18 @@ import { LOG_LEVEL_SEVERITY } from './types';
 
 const DEFAULT_FLUSH_INTERVAL = 10_000;
 const DEFAULT_MIN_REMOTE_LEVEL: LogLevel = 'warn';
-const INGEST_PATH = '/api/observatory/logs/ingest';
+const DEFAULT_INGEST_PATH = '/api/logs/ingest';
 
-/**
- * Resolve the Observatory endpoint.
- * Returns the configured endpoint URL or null if Observatory is disabled.
- *
- * Priority:
- *  1. Explicit `config.endpoint`
- *  2. `VITE_OBSERVATORY_ENDPOINT` env var
- *  3. null (disabled — no-op transport)
- */
 function resolveEndpoint(config: ObservabilityConfig): string | null {
   if (config.endpoint) {
     return config.endpoint;
   }
 
-  const envEndpoint = import.meta.env.VITE_OBSERVATORY_ENDPOINT as string | undefined;
+  const envEndpoint = import.meta.env.VITE_TELEMETRY_ENDPOINT as string | undefined;
   if (envEndpoint) {
-    // Env var may be a bare origin (http://host:port) or a full URL
-    return envEndpoint.endsWith(INGEST_PATH) ? envEndpoint : `${envEndpoint}${INGEST_PATH}`;
+    return envEndpoint.endsWith('/ingest') ? envEndpoint : `${envEndpoint}${DEFAULT_INGEST_PATH}`;
   }
 
-  // No endpoint configured — disable Observatory logging
   return null;
 }
 

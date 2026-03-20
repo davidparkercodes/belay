@@ -73,6 +73,16 @@
           "group": "belay@2"
         }
       ]
+    },
+    "configuration": {
+      "title": "Belay",
+      "properties": {
+        "belay.port": {
+          "type": "number",
+          "default": 33412,
+          "description": "Port for the Belay daemon API. If .belay/config.toml exists in the workspace with an [api] port setting, that takes precedence."
+        }
+      }
     }
   },
   "scripts": {

@@ -51,7 +51,7 @@ const maxDiffLines = 10000
 
 // maxLCSCells is the safety limit for the LCS matrix (n*m cells).
 // If exceeded, computeEdits falls back to a simple delete-all/insert-all diff.
-const maxLCSCells = 100_000_000
+const maxLCSCells = 10_000_000
 
 // ReplaySession computes the net file changes for a session by replaying its events.
 func ReplaySession(idx *index.Index, objStore *store.Store, sessionID string) (*SessionResult, error) {
@@ -139,36 +139,52 @@ func computeNetOperation(firstOp, lastOp schema.Operation, firstHash, lastHash s
 	return "modify"
 }
 
+const snapshotBatchSize = 50000
+
 // SnapshotAt reconstructs the state of all tracked files at the given nanosecond timestamp.
 func SnapshotAt(idx *index.Index, timestampNano int64) (*Snapshot, error) {
-	events, err := idx.QueryEvents(&index.Query{
-		Until:     timestampNano,
-		OrderDesc: false,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("query events for snapshot: %w", err)
-	}
-
 	snapshot := &Snapshot{
 		Timestamp: timestampNano,
 		Files:     make(map[string]*FileState),
 	}
 
-	for _, ev := range events {
-		if ev.Op == schema.OpDelete {
-			delete(snapshot.Files, ev.FilePath)
-		} else {
-			snapshot.Files[ev.FilePath] = &FileState{
-				Path:        ev.FilePath,
-				ContentHash: ev.ContentHash,
-				Size:        ev.ContentSize,
-				LastEvent:   ev.EventID,
+	offset := 0
+	for {
+		events, err := idx.QueryEvents(&index.Query{
+			Until:     timestampNano,
+			OrderDesc: false,
+			Limit:     snapshotBatchSize,
+			Offset:    offset,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("query events for snapshot: %w", err)
+		}
+
+		if len(events) == 0 {
+			break
+		}
+
+		for _, ev := range events {
+			if ev.Op == schema.OpDelete {
+				delete(snapshot.Files, ev.FilePath)
+			} else {
+				snapshot.Files[ev.FilePath] = &FileState{
+					Path:        ev.FilePath,
+					ContentHash: ev.ContentHash,
+					Size:        ev.ContentSize,
+					LastEvent:   ev.EventID,
+				}
+			}
+
+			if ev.Op == schema.OpRename && ev.OldPath != "" {
+				delete(snapshot.Files, ev.OldPath)
 			}
 		}
 
-		if ev.Op == schema.OpRename && ev.OldPath != "" {
-			delete(snapshot.Files, ev.OldPath)
+		if len(events) < snapshotBatchSize {
+			break
 		}
+		offset += len(events)
 	}
 
 	return snapshot, nil

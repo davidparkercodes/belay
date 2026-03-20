@@ -287,7 +287,7 @@ function HealthBanner() {
         </span>
       </div>
       <div className="text-xs tracking-wider" style={{ color: '#A1A1AA' }}>
-        Run: <span style={{ color: bannerColor }}>thelab restart belay-api</span>
+        Run: <span style={{ color: bannerColor }}>belay daemon restart</span>
       </div>
     </div>
   )

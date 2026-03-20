@@ -6,7 +6,7 @@ vars:
 
 tasks:
   build:
-    desc: Build the belay binary
+    desc: Build the belay binary (without embedded dashboard)
     cmds:
       - go build -o {{.BUILD_DIR}}/{{.BINARY}} ./cmd/belay
     sources:
@@ -14,6 +14,14 @@ tasks:
       - go.mod
     generates:
       - "{{.BUILD_DIR}}/{{.BINARY}}"
+
+  build:full:
+    desc: Build frontend + embed dashboard into the belay binary
+    cmds:
+      - cd frontend && npm run build
+      - rm -rf internal/dashboard/dist
+      - cp -r frontend/dist internal/dashboard/dist
+      - go build -o {{.BUILD_DIR}}/{{.BINARY}} ./cmd/belay
 
   run:
     desc: Build and run belay

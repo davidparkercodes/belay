@@ -249,6 +249,20 @@ func (idx *Index) CountEvents() (int64, error) {
 	return count, err
 }
 
+// CountSessionEvents returns the number of events for a specific session.
+func (idx *Index) CountSessionEvents(sessionID string) (int, error) {
+	var count int
+	err := idx.db.QueryRow("SELECT COUNT(*) FROM events WHERE session_id = ?", sessionID).Scan(&count)
+	return count, err
+}
+
+// CountSessionFiles returns the number of distinct files changed in a session.
+func (idx *Index) CountSessionFiles(sessionID string) (int, error) {
+	var count int
+	err := idx.db.QueryRow("SELECT COUNT(DISTINCT file_path) FROM events WHERE session_id = ?", sessionID).Scan(&count)
+	return count, err
+}
+
 // FileHistory returns the most recent events for a specific file path, newest first.
 func (idx *Index) FileHistory(filePath string, limit int) ([]*schema.Event, error) {
 	if limit <= 0 {
@@ -317,6 +331,20 @@ func (idx *Index) UpsertSession(session *schema.Session) error {
 		return fmt.Errorf("upsert session %s: %w", session.SessionID, err)
 	}
 	return nil
+}
+
+// CountSessions returns the total number of sessions.
+func (idx *Index) CountSessions() (int64, error) {
+	var count int64
+	err := idx.db.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&count)
+	return count, err
+}
+
+// CountActiveSessions returns the number of active sessions.
+func (idx *Index) CountActiveSessions() (int64, error) {
+	var count int64
+	err := idx.db.QueryRow("SELECT COUNT(*) FROM sessions WHERE status = 'active'").Scan(&count)
+	return count, err
 }
 
 // GetSession retrieves a single session by its ID.

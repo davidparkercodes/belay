@@ -1,6 +1,6 @@
 import type { LogEntry, LogLevel, ObservabilityConfig } from './types';
 
-const SESSION_KEY = '__observatory_session_id';
+const SESSION_KEY = '__belay_telemetry_session_id';
 
 function generateSessionId(): string {
   const array = new Uint8Array(16);

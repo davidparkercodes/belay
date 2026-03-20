@@ -36,12 +36,14 @@ type Daemon struct {
 	logger       *log.Logger
 	sessionFilesMu sync.RWMutex
 	sessionFiles   map[string]map[string]bool
-	stopCheckpoint chan struct{}
-	checkpointDone chan struct{}
-	stopCleanup    chan struct{}
-	cleanupDone    chan struct{}
-	stopWatchdog   chan struct{}
-	watchdogDone   chan struct{}
+	stopCheckpoint  chan struct{}
+	checkpointDone  chan struct{}
+	stopCleanup     chan struct{}
+	cleanupDone     chan struct{}
+	stopCompaction  chan struct{}
+	compactionDone  chan struct{}
+	stopWatchdog    chan struct{}
+	watchdogDone    chan struct{}
 	watchdogRestarts int
 	burst          *burstDetector
 }
@@ -178,7 +180,11 @@ func (d *Daemon) init() error {
 	d.sessionFiles = make(map[string]map[string]bool)
 
 	claudeDetector := session.NewClaudeDetector(d.cfg.ProjectRoot)
-	d.registry = session.NewRegistry(claudeDetector)
+	cursorDetector := session.NewCursorDetector(d.cfg.ProjectRoot)
+	windsurfDetector := session.NewWindsurfDetector(d.cfg.ProjectRoot)
+	aiderDetector := session.NewAiderDetector(d.cfg.ProjectRoot)
+	copilotDetector := session.NewCopilotDetector(d.cfg.ProjectRoot)
+	d.registry = session.NewRegistry(claudeDetector, cursorDetector, windsurfDetector, aiderDetector, copilotDetector)
 
 	d.registry.SetOnSessionStart(func(s *schema.Session) {
 		d.logger.Printf("session started: %s (%s, PID %d)", s.SessionID, s.ToolName, s.PID)
@@ -222,6 +228,10 @@ func (d *Daemon) init() error {
 		}
 		metaEvent.SetTimestamp(time.Now())
 		d.logWriter.Append(metaEvent)
+
+		d.sessionFilesMu.Lock()
+		delete(d.sessionFiles, s.SessionID)
+		d.sessionFilesMu.Unlock()
 	})
 
 	d.burst = newBurstDetector(func(event *schema.Event) {
@@ -246,6 +256,10 @@ func (d *Daemon) init() error {
 	d.stopCleanup = make(chan struct{})
 	d.cleanupDone = make(chan struct{})
 	go d.runSessionCleanupLoop()
+
+	d.stopCompaction = make(chan struct{})
+	d.compactionDone = make(chan struct{})
+	go d.runCompactionLoop()
 
 	return nil
 }
@@ -418,11 +432,59 @@ func (d *Daemon) cleanupStaleSessions() {
 				continue
 			}
 			cleaned++
+		} else {
+			continue
 		}
+		d.sessionFilesMu.Lock()
+		delete(d.sessionFiles, s.SessionID)
+		d.sessionFilesMu.Unlock()
 	}
 
 	if cleaned > 0 {
 		d.logger.Printf("session cleanup: marked %d stale sessions as crashed", cleaned)
+	}
+}
+
+func (d *Daemon) runCompactionLoop() {
+	defer close(d.compactionDone)
+	ticker := time.NewTicker(6 * time.Hour)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			d.runAutoCompaction()
+		case <-d.stopCompaction:
+			return
+		}
+	}
+}
+
+func (d *Daemon) runAutoCompaction() {
+	start := time.Now()
+	compactor := store.NewCompactor(d.idx, d.objStore, &d.cfg.Retention, false)
+	result, err := compactor.RunCompaction()
+	if err != nil {
+		d.logger.Printf("auto-compaction failed: %v", err)
+		return
+	}
+	if result.EventsRemoved > 0 || result.BytesFreed > 0 {
+		d.logger.Printf("auto-compaction: reviewed %d events, removed %d, freed %s (%s)",
+			result.EventsReviewed, result.EventsRemoved,
+			formatBytes(result.BytesFreed), time.Since(start).Round(time.Millisecond))
+	}
+}
+
+func formatBytes(b int64) string {
+	switch {
+	case b >= 1<<30:
+		return fmt.Sprintf("%.1f GB", float64(b)/float64(1<<30))
+	case b >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(b)/float64(1<<20))
+	case b >= 1<<10:
+		return fmt.Sprintf("%.1f KB", float64(b)/float64(1<<10))
+	default:
+		return fmt.Sprintf("%d B", b)
 	}
 }
 
@@ -563,6 +625,13 @@ func (d *Daemon) cleanup() {
 		close(d.stopCleanup)
 		<-d.cleanupDone
 		d.logger.Println("shutdown: session cleanup loop stopped")
+	}
+
+	if d.stopCompaction != nil {
+		d.logger.Println("shutdown: stopping compaction loop...")
+		close(d.stopCompaction)
+		<-d.compactionDone
+		d.logger.Println("shutdown: compaction loop stopped")
 	}
 
 	// 4. Stop the periodic WAL checkpoint loop.

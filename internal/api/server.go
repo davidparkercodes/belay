@@ -18,6 +18,7 @@ import (
 
 	"github.com/davidparkercodes/belay/internal/config"
 	"github.com/davidparkercodes/belay/internal/conflict"
+	"github.com/davidparkercodes/belay/internal/dashboard"
 	"github.com/davidparkercodes/belay/internal/index"
 	"github.com/davidparkercodes/belay/internal/replay"
 	"github.com/davidparkercodes/belay/internal/schema"
@@ -46,6 +47,10 @@ type Server struct {
 	startedAt     time.Time
 	rl            *rateLimiter
 	watcherHealth WatcherHealthProvider
+
+	statsCacheMu   sync.RWMutex
+	statsCache     map[string]interface{}
+	statsCachedAt  time.Time
 
 	onRecord RecordHandler
 
@@ -105,6 +110,11 @@ func (s *Server) Start() error {
 
 	mux.HandleFunc("GET /api/stream", s.handleStream)
 
+	hasDashboard := dashboard.HasAssets()
+	if hasDashboard {
+		mux.Handle("/", dashboard.Handler())
+	}
+
 	port := s.cfg.API.Port
 	if port == 0 {
 		port = 33412
@@ -120,6 +130,8 @@ func (s *Server) Start() error {
 		Addr:        fmt.Sprintf("%s:%d", host, port),
 		Handler:     handler,
 		ReadTimeout: 30 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	ln, err := net.Listen("tcp", s.server.Addr)
@@ -127,7 +139,13 @@ func (s *Server) Start() error {
 		return fmt.Errorf("listen %s: %w", s.server.Addr, err)
 	}
 
+	if host != "127.0.0.1" && host != "localhost" && host != "::1" {
+		s.logger.Printf("WARNING: API server binding to %s — Belay has no authentication. Only bind to non-localhost on trusted networks.", host)
+	}
 	s.logger.Printf("API server listening on %s:%d", host, port)
+	if hasDashboard {
+		s.logger.Printf("Dashboard available at http://%s:%d/", host, port)
+	}
 	go func() {
 		if err := s.server.Serve(ln); err != nil && err != http.ErrServerClosed {
 			s.logger.Printf("API server error: %v", err)
@@ -321,16 +339,10 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 			StartedAt: events[0].Timestamp(),
 		}
 	}
-	allEvents, _ := s.idx.QueryEvents(&index.Query{
-		Sessions: []string{id},
-		Limit:    0,
-	})
-	sess.EventCount = len(allEvents)
-	files := make(map[string]bool)
-	for _, e := range allEvents {
-		files[e.FilePath] = true
-	}
-	sess.FilesChanged = len(files)
+	eventCount, _ := s.idx.CountSessionEvents(id)
+	sess.EventCount = eventCount
+	fileCount, _ := s.idx.CountSessionFiles(id)
+	sess.FilesChanged = fileCount
 	writeJSON(w, sess.ToJSON())
 }
 
@@ -532,19 +544,37 @@ func (s *Server) handleConflicts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
+	const statsTTL = 10 * time.Second
+
+	s.statsCacheMu.RLock()
+	if s.statsCache != nil && time.Since(s.statsCachedAt) < statsTTL {
+		cached := s.statsCache
+		s.statsCacheMu.RUnlock()
+		writeJSON(w, cached)
+		return
+	}
+	s.statsCacheMu.RUnlock()
+
 	totalEvents, _ := s.idx.CountEvents()
-	allSessions, _ := s.idx.ListSessions(false, 0, 0)
-	activeSessions, _ := s.idx.ListSessions(true, 0, 0)
+	totalSessions, _ := s.idx.CountSessions()
+	activeSessions, _ := s.idx.CountActiveSessions()
 
 	storeBytes, objectCount, _ := s.objStore.Size()
 
-	writeJSON(w, map[string]interface{}{
+	result := map[string]interface{}{
 		"total_events":    totalEvents,
-		"total_sessions":  len(allSessions),
-		"active_sessions": len(activeSessions),
+		"total_sessions":  totalSessions,
+		"active_sessions": activeSessions,
 		"store_bytes":     storeBytes,
 		"store_objects":   objectCount,
-	})
+	}
+
+	s.statsCacheMu.Lock()
+	s.statsCache = result
+	s.statsCachedAt = time.Now()
+	s.statsCacheMu.Unlock()
+
+	writeJSON(w, result)
 }
 
 // RecordRequest is the JSON payload for the POST /api/record endpoint.
@@ -711,10 +741,12 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rc := http.NewResponseController(w)
+	rc.SetWriteDeadline(time.Time{})
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	id := fmt.Sprintf("sub-%d", time.Now().UnixNano())
 	ch := make(chan *EventMessage, 64)
@@ -753,7 +785,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 }
 
 
-var localOriginPattern = regexp.MustCompile(`^https?://(localhost|127\.0\.0\.1|[a-zA-Z0-9-]+\.ts\.net)(:\d+)?$`)
+var localOriginPattern = regexp.MustCompile(`^https?://(localhost|127\.0\.0\.1)(:\d+)?$`)
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -791,6 +823,7 @@ func writeError(w http.ResponseWriter, code int, message string) {
 // --- Rate Limiter ---
 
 type ipBucket struct {
+	mu        sync.Mutex
 	tokens    float64
 	lastCheck time.Time
 }
@@ -799,7 +832,6 @@ type rateLimiter struct {
 	buckets sync.Map // map[string]*ipBucket
 	rate    float64  // tokens per second
 	burst   float64  // max tokens (bucket capacity)
-	mu      sync.Mutex
 	stop    chan struct{}
 }
 
@@ -844,8 +876,8 @@ func (rl *rateLimiter) allow(ip string) bool {
 	})
 	b := val.(*ipBucket)
 
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
 	elapsed := now.Sub(b.lastCheck).Seconds()
 	b.lastCheck = now

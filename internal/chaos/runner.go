@@ -176,13 +176,20 @@ func WriteReport(report *ChaosReport, dir string) (string, error) {
 	return path, nil
 }
 
-// FindWebsiteResultsDir walks up from cwd looking for the belay-website public dir.
+// FindWebsiteResultsDir returns a directory for writing chaos test reports.
+// Checks BELAY_CHAOS_RESULTS_DIR env var first, then walks up from cwd
+// looking for a belay-website/public/chaos-results directory.
 func FindWebsiteResultsDir() string {
+	if envDir := os.Getenv("BELAY_CHAOS_RESULTS_DIR"); envDir != "" {
+		if fi, err := os.Stat(envDir); err == nil && fi.IsDir() {
+			return envDir
+		}
+	}
+
 	dir, _ := os.Getwd()
 	for {
-		candidate := filepath.Join(dir, "domains", "agentic-development", "belay-website", "public", "chaos-results")
-		parent := filepath.Dir(candidate)
-		if fi, err := os.Stat(filepath.Dir(parent)); err == nil && fi.IsDir() {
+		candidate := filepath.Join(dir, "belay-website", "public", "chaos-results")
+		if fi, err := os.Stat(filepath.Dir(candidate)); err == nil && fi.IsDir() {
 			return candidate
 		}
 		next := filepath.Dir(dir)

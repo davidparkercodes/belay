@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import * as path from "path";
+import * as fs from "fs";
 import { BelayClient } from "./belayClient";
 import { TimelineProvider } from "./timelineProvider";
 import { SessionsProvider } from "./sessionsProvider";
@@ -7,8 +8,36 @@ import { BelayStatusBar } from "./statusBar";
 
 let statusBar: BelayStatusBar | undefined;
 
+function discoverPort(): number {
+  const defaultPort = 33412;
+
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (workspaceRoot) {
+    const configPath = path.join(workspaceRoot, ".belay", "config.toml");
+    try {
+      const content = fs.readFileSync(configPath, "utf-8");
+      const portMatch = content.match(/^\s*port\s*=\s*(\d+)/m);
+      if (portMatch) {
+        const parsed = parseInt(portMatch[1], 10);
+        if (parsed > 0 && parsed <= 65535) {
+          return parsed;
+        }
+      }
+    } catch {
+      // config.toml doesn't exist or isn't readable, fall through
+    }
+  }
+
+  const settingsPort = vscode.workspace.getConfiguration("belay").get<number>("port");
+  if (settingsPort && settingsPort > 0 && settingsPort <= 65535) {
+    return settingsPort;
+  }
+
+  return defaultPort;
+}
+
 export function activate(context: vscode.ExtensionContext): void {
-  const client = new BelayClient(33412);
+  const client = new BelayClient(discoverPort());
 
   // --- Tree view providers ---
   const timelineProvider = new TimelineProvider(client);

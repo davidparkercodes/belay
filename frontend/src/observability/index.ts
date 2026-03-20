@@ -18,7 +18,7 @@ export function initObservability(config: ObservabilityConfig): ObservabilityLog
   setupErrorCapture(logger);
 
   if (typeof window !== 'undefined') {
-    (window as unknown as Record<string, unknown>).__observatory = {
+    (window as unknown as Record<string, unknown>).__belay_telemetry = {
       logger,
       transport,
       getBuffer: () => logger.getBuffer(),

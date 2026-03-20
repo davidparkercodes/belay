@@ -1,15 +1,6 @@
 import type { BelayEvent, BelaySession, BelayConflict, FileInfo, Stats, HealthData } from '../types'
-const API_PORT = 33412
-
 function getApiBase(): string {
-  if (typeof window !== 'undefined' && 'Capacitor' in window) {
-    return `https://${window.location.hostname}:${API_PORT + 10000}/api`
-  }
-  try {
-    const isDev = (import.meta as unknown as Record<string, Record<string, boolean>>).env?.DEV
-    if (isDev) return '/api'
-  } catch {}
-  return `https://${window.location.hostname}:${API_PORT + 10000}/api`
+  return '/api'
 }
 
 const BASE = getApiBase()

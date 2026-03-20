@@ -147,7 +147,7 @@ export default function SessionsView() {
                 borderRadius: '2px',
               }}
             >
-              Run: <span style={{ color: degraded ? '#ffaa00' : '#ff3366' }}>thelab restart belay-api</span>
+              Run: <span style={{ color: degraded ? '#ffaa00' : '#ff3366' }}>belay daemon restart</span>
             </div>
           </div>
         ) : (
