@@ -21,7 +21,6 @@ belay/
 │   ├── git/                 # Git bridge (commit, stash, import)
 │   └── config/              # Configuration (TOML)
 ├── hooks/                   # AI tool integration scripts
-├── frontend/                # React + TypeScript dashboard
 └── go.mod
 ```
 
@@ -58,5 +57,4 @@ Each event captures:
 
 ## Ports (defaults, configurable in .belay/config.toml)
 
-- Dashboard dev server: 33411
 - API (embedded in daemon): 33412

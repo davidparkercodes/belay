@@ -14,12 +14,7 @@ Thumbs.db
 # Belay data (don't commit tracked data)
 .belay/
 
-# Frontend
-frontend/node_modules/
-frontend/dist/
-frontend/dev-dist/
-
-# Embedded dashboard (copied from frontend/dist during build:full)
+# Embedded dashboard (reserved for future UI)
 internal/dashboard/dist/
 !internal/dashboard/dist/.gitkeep
 

@@ -16,8 +16,8 @@ Belay is an event-sourced filesystem journal that captures every file change wit
 - **File recovery** -- restore any file to any prior version by time, event ID, or session
 - **Session replay and diff** -- reconstruct exactly what a session did, as unified diffs or applied patches
 - **Conflict detection** -- find overlapping modifications across concurrent sessions
-- **Real-time dashboard** -- React-based UI with live SSE event streaming
 - **CLI + REST API** -- full control from the terminal or programmatically
+- **SSE streaming** -- real-time event stream for building integrations
 - **Hook-based capture** -- push events from AI tools with exact attribution (no polling)
 - **Content-addressable store** -- SHA-256 hashed, gzip-compressed, deduplicated
 
@@ -54,12 +54,9 @@ belay init                      # Initialize .belay/ in your project
 belay daemon start              # Start watcher + API server
 ```
 
-Open `http://localhost:33411` for the dashboard (requires building the frontend -- see below).
-
 ## Prerequisites
 
 - **Go 1.24+**
-- **Node.js 18+** — only needed if you want to build/run the dashboard
 
 ## Platform Support
 
@@ -70,7 +67,6 @@ Open `http://localhost:33411` for the dashboard (requires building the frontend 
 ## Architecture
 
 - **Backend**: Go -- CLI (Cobra), filesystem watcher (FSEvents on macOS, fsnotify elsewhere), embedded HTTP API server, SQLite index
-- **Frontend**: React + TypeScript + Tailwind dashboard with timeline, session, file, conflict, and live views
 - **Storage**: Append-only event log (binary segments) + content-addressable object store (SHA-256, gzip) + SQLite WAL-mode index
 - **Config**: `.belay/config.toml`
 
@@ -203,17 +199,6 @@ curl -X POST http://localhost:33412/api/record \
 ```
 
 Without hooks, Belay still captures all file changes via filesystem watching and uses process-tree heuristics for session attribution.
-
-## Dashboard
-
-The frontend is a standalone React + TypeScript + Tailwind app with no external monorepo dependencies. All components are bundled locally.
-
-```bash
-cd frontend
-npm install
-npm run dev     # Dev server on :33411
-npm run build   # Production build
-```
 
 ## Building
 
