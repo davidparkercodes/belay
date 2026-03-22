@@ -23,7 +23,7 @@ func TestDiffCmd_Flags(t *testing.T) {
 		defValue string
 	}{
 		{"session", ""},
-		{"at", ""},
+		{"roughly-around", ""},
 		{"from", ""},
 		{"to", ""},
 		{"stat", "false"},

@@ -341,9 +341,10 @@ func TestRestoreCmd_Flags(t *testing.T) {
 	cmd := newRestoreCmd()
 
 	assertFlags(t, cmd, []cmdTestCase{
-		{"at", ""},
-		{"event", ""},
 		{"session", ""},
+		{"event", ""},
+		{"roughly-around", ""},
+		{"all", "false"},
 		{"dry-run", "false"},
 		{"execute", "false"},
 	})
@@ -457,7 +458,7 @@ func TestSnapshotCmd_Flags(t *testing.T) {
 	cmd := newSnapshotCmd()
 
 	assertFlags(t, cmd, []cmdTestCase{
-		{"at", ""},
+		{"roughly-around", ""},
 		{"output", ""},
 		{"execute", "false"},
 		{"file", ""},
@@ -476,10 +477,10 @@ func TestSnapshotCmd_AtFlagRequired(t *testing.T) {
 
 	err := root.Execute()
 	if err == nil {
-		t.Fatal("snapshot without --at should fail")
+		t.Fatal("snapshot without --roughly-around should fail")
 	}
-	if !strings.Contains(err.Error(), "at") {
-		t.Errorf("error should mention 'at', got: %v", err)
+	if !strings.Contains(err.Error(), "roughly-around") {
+		t.Errorf("error should mention 'roughly-around', got: %v", err)
 	}
 }
 

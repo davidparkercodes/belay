@@ -1,6 +1,6 @@
 # Belay QA Checklist -- Pre-Release Manual Testing
 
-Personal testing checklist before any public release. Go through every section. Check the box when verified. If something fails, note the issue inline and fix before releasing.
+Pre-release QA checklist. Go through every section. Check the box when verified. If something fails, note the issue inline and fix before releasing.
 
 ---
 
@@ -52,7 +52,7 @@ Personal testing checklist before any public release. Go through every section. 
 
 ## Recovery & Restore
 
-- [ ] `belay restore <file> --at "5m ago"` restores correct content
+- [ ] `belay restore <file> --roughly-around "5m ago"` restores correct content
 - [ ] `belay restore <file> --session <id>` restores to session state
 - [ ] `belay restore <file> --event <id>` restores to specific event
 - [ ] Restoring a deleted file recreates it
@@ -78,7 +78,7 @@ Personal testing checklist before any public release. Go through every section. 
 
 ## Snapshots
 
-- [ ] `belay snapshot --at "1h ago"` reconstructs project state
+- [ ] `belay snapshot --roughly-around "1h ago"` reconstructs project state
 - [ ] `belay snapshot --session <id>` reconstructs state at session end
 - [ ] Snapshot output directory contains correct files
 
@@ -118,17 +118,9 @@ Personal testing checklist before any public release. Go through every section. 
 - [ ] `POST /api/record` accepts and stores external events
 - [ ] `GET /api/stream` streams SSE events in real-time
 
-## Dashboard (Frontend)
+## Dashboard (Future)
 
-- [ ] Dashboard loads at `http://localhost:33411`
-- [ ] Timeline view shows events in real-time
-- [ ] Sessions view lists all sessions
-- [ ] Session detail view shows files changed and diffs
-- [ ] Files view lists all tracked files
-- [ ] File detail view shows change history
-- [ ] Conflicts view displays detected conflicts
-- [ ] Live view streams events via SSE
-- [ ] No console errors in browser dev tools
+Dashboard is not included in the initial release. This section is reserved for future testing when the web UI ships.
 
 ## Claude Code Hook
 

@@ -23,19 +23,19 @@ The ultimate time-travel feature.`,
 		RunE: runSnapshot,
 	}
 
-	cmd.Flags().String("at", "", "Timestamp to snapshot (required)")
+	cmd.Flags().String("roughly-around", "", "Timestamp to snapshot (human convenience, accepts relative times like '1h ago')")
 	cmd.Flags().String("output", "", "Directory to export files to")
 	cmd.Flags().Bool("execute", false, "Actually write files when using --output (requires safety.allow_writes)")
 	cmd.Flags().String("file", "", "Show a single file at the given time")
 	cmd.Flags().Bool("ls", false, "Just list files that existed at that time")
 	cmd.Flags().Bool("json", false, "Output as JSON")
-	cmd.MarkFlagRequired("at")
+	cmd.MarkFlagRequired("roughly-around")
 
 	return cmd
 }
 
 func runSnapshot(cmd *cobra.Command, args []string) error {
-	atStr, _ := cmd.Flags().GetString("at")
+	atStr, _ := cmd.Flags().GetString("roughly-around")
 	outputDir, _ := cmd.Flags().GetString("output")
 	execute, _ := cmd.Flags().GetBool("execute")
 	singleFile, _ := cmd.Flags().GetString("file")
@@ -66,7 +66,7 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 
 	t, err := parseRelativeTime(atStr)
 	if err != nil {
-		return fmt.Errorf("invalid --at: %w", err)
+		return fmt.Errorf("invalid --roughly-around: %w", err)
 	}
 	targetNano := t.UnixNano()
 
@@ -148,7 +148,7 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 	}
 
 	if outputDir != "" {
-		if err := checkSafetyGate(cfg, execute, "snapshot", "--at <time> --output <dir>"); err != nil {
+		if err := checkSafetyGate(cfg, execute, "snapshot", "--roughly-around <time> --output <dir>"); err != nil {
 			fmt.Printf("\n%s\n", err)
 			return nil
 		}

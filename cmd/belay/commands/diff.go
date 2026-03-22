@@ -23,7 +23,7 @@ or between different AI sessions.`,
 	}
 
 	cmd.Flags().String("session", "", "Show all changes from a session")
-	cmd.Flags().String("at", "", "Compare file at this time vs current")
+	cmd.Flags().String("roughly-around", "", "Compare file at roughly this time vs current (human convenience, AI agents should use --session)")
 	cmd.Flags().String("from", "", "Start time for range comparison")
 	cmd.Flags().String("to", "", "End time for range comparison")
 	cmd.Flags().Bool("stat", false, "Show diffstat summary only")
@@ -33,7 +33,7 @@ or between different AI sessions.`,
 
 func runDiff(cmd *cobra.Command, args []string) error {
 	sessionFilter, _ := cmd.Flags().GetString("session")
-	atTime, _ := cmd.Flags().GetString("at")
+	atTime, _ := cmd.Flags().GetString("roughly-around")
 	statOnly, _ := cmd.Flags().GetBool("stat")
 
 	projectRoot, err := config.FindProjectRoot()
@@ -65,7 +65,7 @@ func runDiff(cmd *cobra.Command, args []string) error {
 	if len(args) > 0 && atTime != "" {
 		t, err := parseRelativeTime(atTime)
 		if err != nil {
-			return fmt.Errorf("invalid --at: %w", err)
+			return fmt.Errorf("invalid --roughly-around: %w", err)
 		}
 		return diffFileAtTime(idx, objStore, projectRoot, args[0], t.UnixNano(), statOnly)
 	}
