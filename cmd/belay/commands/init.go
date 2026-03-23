@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/charmbracelet/huh"
@@ -14,11 +13,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const belayASCII = `    ██████  ███████ ██       █████  ██    ██
-    ██   ██ ██      ██      ██   ██  ██  ██
-    ██████  █████   ██      ███████   ████
-    ██   ██ ██      ██      ██   ██    ██
-    ██████  ███████ ███████ ██   ██    ██`
+const belayASCII = `    ▐ ██████  ███████ ██       █████  ██    ██
+    ▐ ██   ██ ██      ██      ██   ██  ██  ██
+    ▐ ██████  █████   ██      ███████   ████
+    ▐ ██   ██ ██      ██      ██   ██    ██
+    ▐ ██████  ███████ ███████ ██   ██    ██`
 
 type projectType struct {
 	Name     string
@@ -168,33 +167,54 @@ func countIgnorePatterns(content string) int {
 	return count
 }
 
-func currentShell() string {
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		if runtime.GOOS == "windows" {
-			return "powershell"
-		}
-		return "bash"
-	}
-	return filepath.Base(shell)
-}
-
 var (
-	cyan    = lipgloss.Color("#00F0FF")
+	orange  = lipgloss.Color("#E8943A")
+	amber   = lipgloss.Color("#F5A623")
 	green   = lipgloss.Color("#50FA7B")
-	purple  = lipgloss.Color("#BD93F9")
-	white   = lipgloss.Color("#F8F8F2")
+	white   = lipgloss.Color("#F0E6D3")
 	dimGray = lipgloss.Color("#A1A1AA")
 	yellow  = lipgloss.Color("#F1FA8C")
+	darkBg  = lipgloss.Color("#1A1A2E")
 )
+
+func belayTheme() *huh.Theme {
+	t := huh.ThemeDracula()
+
+	t.Focused.Title = t.Focused.Title.Foreground(orange)
+	t.Focused.NoteTitle = t.Focused.NoteTitle.Foreground(orange)
+	t.Focused.Description = t.Focused.Description.Foreground(dimGray)
+	t.Focused.Directory = t.Focused.Directory.Foreground(orange)
+	t.Focused.FocusedButton = t.Focused.FocusedButton.Foreground(darkBg).Background(orange).Bold(true)
+	t.Focused.BlurredButton = t.Focused.BlurredButton.Foreground(white).Background(lipgloss.Color("#2A2A3E"))
+	t.Focused.SelectSelector = t.Focused.SelectSelector.Foreground(orange)
+	t.Focused.NextIndicator = t.Focused.NextIndicator.Foreground(orange)
+	t.Focused.PrevIndicator = t.Focused.PrevIndicator.Foreground(orange)
+	t.Focused.SelectedOption = t.Focused.SelectedOption.Foreground(orange)
+	t.Focused.SelectedPrefix = t.Focused.SelectedPrefix.Foreground(orange)
+	t.Focused.TextInput.Cursor = t.Focused.TextInput.Cursor.Foreground(orange)
+	t.Focused.TextInput.Prompt = t.Focused.TextInput.Prompt.Foreground(orange)
+	t.Focused.Base = t.Focused.Base.BorderForeground(lipgloss.Color("#3E3E50"))
+	t.Focused.Card = t.Focused.Base
+
+	t.Blurred = t.Focused
+	t.Blurred.Base = t.Blurred.Base.BorderStyle(lipgloss.HiddenBorder())
+	t.Blurred.Card = t.Blurred.Base
+	t.Blurred.NextIndicator = lipgloss.NewStyle()
+	t.Blurred.PrevIndicator = lipgloss.NewStyle()
+
+	t.Group.Title = t.Focused.Title
+	t.Group.Description = t.Focused.Description
+
+	return t
+}
 
 func printBanner(version string) {
 	bannerStyle := lipgloss.NewStyle().
-		Foreground(cyan).
+		Foreground(orange).
 		Bold(true)
 
 	versionStyle := lipgloss.NewStyle().
-		Foreground(purple).
+		Foreground(amber).
 		Bold(true)
 
 	taglineStyle := lipgloss.NewStyle().
@@ -205,7 +225,7 @@ func printBanner(version string) {
 	fmt.Println()
 	fmt.Printf("    %s  %s\n",
 		versionStyle.Render(version),
-		taglineStyle.Render("AI-aware local version control"))
+		taglineStyle.Render("Local version control for AI agentic coding"))
 	fmt.Println()
 }
 
@@ -215,7 +235,7 @@ func printEnvironment(projectRoot string, detected []string, hasGit bool) {
 		Bold(true)
 
 	valueStyle := lipgloss.NewStyle().
-		Foreground(cyan)
+		Foreground(orange)
 
 	dimStyle := lipgloss.NewStyle().
 		Foreground(dimGray)
@@ -224,22 +244,26 @@ func printEnvironment(projectRoot string, detected []string, hasGit bool) {
 	fmt.Println()
 
 	dirName := filepath.Base(projectRoot)
-	fmt.Printf("    %s %s\n",
+	fmt.Printf("    %s  %s\n",
 		dimStyle.Render("Directory"),
 		valueStyle.Render(dirName+"/"))
 
 	if hasGit {
-		fmt.Printf("    %s     %s\n",
+		fmt.Printf("    %s       %s\n",
 			dimStyle.Render("Git"),
 			valueStyle.Render("detected"))
+	} else {
+		fmt.Printf("    %s       %s\n",
+			dimStyle.Render("Git"),
+			dimStyle.Render("not detected"))
 	}
 
 	if len(detected) > 0 {
-		fmt.Printf("    %s %s\n",
+		fmt.Printf("    %s  %s\n",
 			dimStyle.Render("Projects"),
 			valueStyle.Render(strings.Join(detected, ", ")))
 	} else {
-		fmt.Printf("    %s %s\n",
+		fmt.Printf("    %s  %s\n",
 			dimStyle.Render("Projects"),
 			dimStyle.Render("none detected"))
 	}
@@ -298,7 +322,7 @@ func printTip(text string) {
 
 func printCommand(cmd string) {
 	cmdStyle := lipgloss.NewStyle().
-		Foreground(cyan)
+		Foreground(orange)
 
 	fmt.Printf("         %s\n", cmdStyle.Render(cmd))
 }
@@ -360,19 +384,25 @@ func runInit(cmd *cobra.Command, args []string) error {
 		fields := []huh.Field{
 			huh.NewConfirm().
 				Title(detectionLabel).
+				Description("Creates .belayignore with patterns to skip build artifacts, dependencies, and caches.").
 				Value(&useRecommendedIgnore).
+				WithButtonAlignment(lipgloss.Left).
 				Affirmative("Yes").
 				Negative("No"),
 
 			huh.NewConfirm().
 				Title("Auto-start daemon when entering this project?").
+				Description("Adds a shell hook so the Belay daemon starts automatically when you cd into this directory.").
 				Value(&autoStartDaemon).
+				WithButtonAlignment(lipgloss.Left).
 				Affirmative("Yes").
 				Negative("No"),
 
 			huh.NewConfirm().
-				Title("Set up Claude Code integration?").
+				Title("Show AI agent instructions?").
+				Description("Displays a markdown block to paste into your AI agent's instructions file.").
 				Value(&claudeCodeIntegration).
+				WithButtonAlignment(lipgloss.Left).
 				Affirmative("Yes").
 				Negative("No"),
 		}
@@ -381,7 +411,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 			fields = append(fields,
 				huh.NewConfirm().
 					Title("Install git hooks to track git operations?").
+					Description("Adds post-commit and post-checkout hooks so Belay records git events alongside file changes.").
 					Value(&installGitHooks).
+					WithButtonAlignment(lipgloss.Left).
 					Affirmative("Yes").
 					Negative("No"),
 			)
@@ -389,7 +421,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 		form := huh.NewForm(
 			huh.NewGroup(fields...),
-		).WithTheme(huh.ThemeDracula())
+		).WithTheme(belayTheme())
 
 		err := form.Run()
 		if err != nil {
@@ -470,17 +502,38 @@ func runInit(cmd *cobra.Command, args []string) error {
 	fmt.Println(successStyle.Render("    Belay is watching your files."))
 	fmt.Println()
 
-	shell := currentShell()
 	if autoStartDaemon {
-		printTip("Auto-start daemon on cd:")
-		printCommand(fmt.Sprintf(`eval "$(belay hook init %s)"`, shell))
-		fmt.Println()
+		shell := detectShell()
+		rcFile := shellRCFile(shell)
+		evalLine := fmt.Sprintf(`eval "$(belay hook init %s)"`, shell)
+
+		alreadyInstalled := false
+		if content, err := os.ReadFile(rcFile); err == nil {
+			if strings.Contains(string(content), "belay hook init") {
+				alreadyInstalled = true
+			}
+		}
+
+		if alreadyInstalled {
+			printStep(fmt.Sprintf("Shell hook already in %s", rcFile), true)
+		} else {
+			f, err := os.OpenFile(rcFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err != nil {
+				printStep(fmt.Sprintf("Add shell hook to %s: %v", rcFile, err), false)
+			} else {
+				_, writeErr := f.WriteString("\n" + evalLine + "\n")
+				f.Close()
+				if writeErr != nil {
+					printStep(fmt.Sprintf("Write shell hook: %v", writeErr), false)
+				} else {
+					printStep(fmt.Sprintf("Added shell hook to %s", rcFile), true)
+				}
+			}
+		}
 	}
 
 	if claudeCodeIntegration {
-		printTip("Add Belay to your Claude Code context:")
-		printCommand(fmt.Sprintf(`claude -p "%s"`, claudeCodePrompt))
-		fmt.Println()
+		printAIInstructions()
 	}
 
 	return nil

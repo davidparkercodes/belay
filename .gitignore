@@ -23,4 +23,6 @@ vendor/
 
 # Test coverage
 coverage.txt
+coverage.out
+coverage.html
 *.cover

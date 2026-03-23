@@ -1,7 +1,5 @@
 .git
 .github
-frontend/node_modules
-frontend/dev-dist
 bin/
 .belay/
 *.md

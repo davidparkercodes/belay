@@ -414,7 +414,7 @@ func TestToTOML_ContainsComments(t *testing.T) {
 	if !strings.Contains(output, "# Belay Configuration") {
 		t.Error("ToTOML should contain header comment")
 	}
-	if !strings.Contains(output, "# AI-aware local version control") {
+	if !strings.Contains(output, "# Local version control for AI agentic coding") {
 		t.Error("ToTOML should contain description comment")
 	}
 	if !strings.Contains(output, "# IMPORTANT:") {

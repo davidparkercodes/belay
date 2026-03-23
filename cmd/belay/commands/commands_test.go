@@ -504,10 +504,9 @@ func TestAllCommandsHaveRunEOrSubcommands(t *testing.T) {
 	// Parent-only commands have subcommands but no RunE of their own.
 	// Sessions has RunE on the parent (delegates to runSessionsList).
 	pureParent := map[string]bool{
-		"daemon":      true,
-		"claude-code": true,
-		"hook":        true,
-		"git-hooks":   true,
+		"daemon":    true,
+		"hook":      true,
+		"git-hooks": true,
 	}
 
 	for _, sub := range root.Commands() {

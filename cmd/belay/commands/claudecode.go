@@ -7,67 +7,53 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// claudeCodePrompt is the prompt users pass to `claude -p` to add Belay
-// awareness to their CLAUDE.md. Belay never writes to CLAUDE.md directly —
-// Claude Code does, with the user's review and approval.
-const claudeCodePrompt = `Add a Belay Integration section to my CLAUDE.md. ` +
-	`This project uses Belay (.belay/ directory) for file change tracking ` +
-	`with AI session attribution. Claude should prefer 'belay log', ` +
-	`'belay diff', 'belay sessions', and 'belay restore' over git log/diff ` +
-	`when investigating file changes.`
+const aiInstructionsBlock = `## Belay Integration
 
-func newClaudeCodeCmd() *cobra.Command {
+This project uses Belay (.belay/ directory) for local file change tracking
+with AI session attribution. Prefer belay over git log/diff when investigating
+file changes.
+
+` + "```" + `bash
+belay log                             # Recent file changes
+belay sessions                        # List AI sessions
+belay diff --session <id>             # What a session changed
+belay restore <file> --session <id>   # Restore a file to a previous state
+` + "```"
+
+func newAIInstructionsCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "claude-code",
-		Short: "Claude Code integration commands",
-		Long: `Commands for integrating Belay with Claude Code.
-
-Configure Claude Code to be aware of Belay so it can use the CLI
-for file recovery and session inspection when needed.`,
-	}
-
-	cmd.AddCommand(newClaudeCodeSetupCmd())
-
-	return cmd
-}
-
-func newClaudeCodeSetupCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "setup",
-		Short: "Configure Claude Code to work with Belay",
-		Long: `Prints a claude command you can run to add Belay awareness
-to your CLAUDE.md. Review the command, edit if you like, and press Enter.
-
-Belay never modifies your CLAUDE.md directly — Claude Code does,
-with your review and approval.`,
-		Run: runClaudeCodeSetup,
+		Use:   "ai-instructions",
+		Short: "Show instructions to paste into your AI agent's config",
+		Long: `Prints a markdown block you can paste into your AI agent's
+instructions file (CLAUDE.md, .cursorrules, .windsurfrules, etc.)
+so the agent knows how to use Belay.`,
+		Run: runAIInstructions,
 	}
 
 	return cmd
 }
 
-func runClaudeCodeSetup(cmd *cobra.Command, args []string) {
-	printClaudeCodeInstructions()
+func runAIInstructions(cmd *cobra.Command, args []string) {
+	printAIInstructions()
 }
 
-// printClaudeCodeInstructions prints the claude -p command for the user to run.
-func printClaudeCodeInstructions() {
+func printAIInstructions() {
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("#BD93F9"))
+		Foreground(orange)
 
 	dimStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#A1A1AA"))
 
-	cmdStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#50FA7B"))
+	blockStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#F0E6D3"))
 
 	fmt.Println()
-	fmt.Println(titleStyle.Render("  Claude Code Integration"))
+	fmt.Println(titleStyle.Render("  AI Agent Instructions"))
 	fmt.Println()
-	fmt.Println(dimStyle.Render("  Run this command to add Belay awareness to your CLAUDE.md."))
-	fmt.Println(dimStyle.Render("  Feel free to edit the prompt before pressing Enter."))
+	fmt.Println(dimStyle.Render("  Paste this into your AI agent's instructions file:"))
+	fmt.Println(dimStyle.Render("  (CLAUDE.md, .cursorrules, .windsurfrules, etc.)"))
 	fmt.Println()
-	fmt.Println(cmdStyle.Render(fmt.Sprintf(`  claude -p "%s"`, claudeCodePrompt)))
+	fmt.Println(blockStyle.Render(aiInstructionsBlock))
 	fmt.Println()
 }

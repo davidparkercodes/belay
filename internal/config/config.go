@@ -206,7 +206,7 @@ func (c *Config) ConfigPath() string {
 // ToTOML renders the configuration as a documented TOML string.
 func (c *Config) ToTOML() string {
 	return fmt.Sprintf(`# Belay Configuration
-# AI-aware local version control
+# Local version control for AI agentic coding
 
 [daemon]
 # Log level: debug, info, warn, error

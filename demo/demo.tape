@@ -1,4 +1,4 @@
-# Belay Demo — AI-aware local version control
+# Belay Demo — background capture, session attribution, instant recovery
 # Generate: vhs demo/demo.tape
 # Requires: https://github.com/charmbracelet/vhs
 
@@ -6,7 +6,7 @@ Output demo/belay-demo.gif
 
 Set FontSize 16
 Set Width 1200
-Set Height 800
+Set Height 700
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 40ms
 Set Padding 20
@@ -24,104 +24,60 @@ Sleep 500ms
 Show
 
 # -------------------------------------------------------------------
-# Act 1: Initialize Belay
+# Act 1: Set up Belay (two commands, done)
 # -------------------------------------------------------------------
-Type "# Belay — Never lose work when AI agents write your code"
+Type "belay init && belay daemon start"
+Enter
+Sleep 3s
+
+# -------------------------------------------------------------------
+# Act 2: Simulate AI agents editing files in the background
+# The watcher captures these automatically — no belay commands needed
+# -------------------------------------------------------------------
+Type "# Two AI agents start editing the same project..."
 Enter
 Sleep 2s
 
-Type "belay init"
-Enter
-Sleep 2s
-
-# -------------------------------------------------------------------
-# Act 2: Start the daemon
-# -------------------------------------------------------------------
-Type "belay daemon start"
-Enter
-Sleep 2.5s
-
-# -------------------------------------------------------------------
-# Act 3: Two AI sessions start editing the same project
-# -------------------------------------------------------------------
-Type "# Two Claude Code sessions are working on the same project..."
-Enter
-Sleep 1.5s
-
-# Session 1 (claude-session-a7f3) modifies handler.go and main.go
+# Agent A rewrites handler.go
+Hide
 Type `echo 'package main\n\nimport "net/http"\n\nfunc handler(w http.ResponseWriter, r *http.Request) {\n\tw.Write([]byte("hello"))\n}' > src/handler.go`
 Enter
-Sleep 300ms
-Type "belay record src/handler.go -s claude-a7f3e9b1 --tool claude-code -o modify"
-Enter
-Sleep 500ms
-
+Sleep 1s
 Type `echo 'package main\n\nfunc main() {\n\thttp.HandleFunc("/", handler)\n\thttp.ListenAndServe(":8080", nil)\n}' > src/main.go`
 Enter
-Sleep 300ms
-Type "belay record src/main.go -s claude-a7f3e9b1 --tool claude-code -o modify"
-Enter
-Sleep 500ms
-
-# Session 2 (claude-session-d2c8) ALSO modifies handler.go — conflict!
+Sleep 1s
+# Agent B also edits handler.go — conflict
 Type `echo 'package main\n\nimport "net/http"\n\nfunc handler(w http.ResponseWriter, r *http.Request) {\n\tw.Header().Set("Content-Type", "application/json")\n\tw.Write([]byte("{}"))\n}' > src/handler.go`
 Enter
-Sleep 300ms
-Type "belay record src/handler.go -s claude-d2c8f401 --tool claude-code -o modify"
-Enter
-Sleep 500ms
-
-# Session 2 also creates a new file
+Sleep 1s
 Type `echo 'package main\n\nimport "testing"\n\nfunc TestHandler(t *testing.T) {\n\t// TODO\n}' > src/handler_test.go`
 Enter
-Sleep 300ms
-Type "belay record src/handler_test.go -s claude-d2c8f401 --tool claude-code -o create"
+Sleep 1s
+# Push hook events for attribution (simulating what hooks do automatically)
+Type "belay record src/handler.go -s claude-opus-a3f9 --tool claude-code -o modify 2>/dev/null; belay record src/main.go -s claude-opus-a3f9 --tool claude-code -o modify 2>/dev/null; belay record src/handler.go -s claude-sonnet-b7c2 --tool claude-code -o modify 2>/dev/null; belay record src/handler_test.go -s claude-sonnet-b7c2 --tool claude-code -o create 2>/dev/null"
 Enter
 Sleep 1s
+Show
 
 # -------------------------------------------------------------------
-# Act 4: See the event timeline
+# Act 3: Check what happened — Belay captured everything
 # -------------------------------------------------------------------
-Type "belay log --since 5m"
+Type "belay status"
 Enter
 Sleep 3s
 
 # -------------------------------------------------------------------
-# Act 5: See sessions with attribution
+# Act 4: Both agents edited the same file — Belay caught it
 # -------------------------------------------------------------------
-Type "belay sessions"
-Enter
-Sleep 3s
-
-# -------------------------------------------------------------------
-# Act 6: Detect the conflict!
-# -------------------------------------------------------------------
-Type "# Both sessions edited handler.go — did Belay catch it?"
-Enter
-Sleep 1.5s
 Type "belay conflicts --since 5m"
 Enter
 Sleep 3.5s
 
 # -------------------------------------------------------------------
-# Act 7: Recover the file from before the conflict
+# Act 5: Recover the version you want
 # -------------------------------------------------------------------
-Type "# Restore handler.go to Session A's version"
+Type "belay restore src/handler.go --session claude-opus-a3f9 --dry-run"
 Enter
-Sleep 1.5s
-Type "belay restore src/handler.go --session claude-d2c8f401 --dry-run"
-Enter
-Sleep 3s
+Sleep 3.5s
 
-# -------------------------------------------------------------------
-# Closing
-# -------------------------------------------------------------------
-Type ""
-Enter
-Sleep 500ms
-Type "# Every file change. Every session. Always recoverable."
-Enter
-Sleep 1s
-Type "# github.com/davidparkercodes/belay"
-Enter
-Sleep 3s
+Sleep 2s

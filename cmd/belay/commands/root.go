@@ -9,7 +9,7 @@ import (
 func NewRootCmd(version string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "belay",
-		Short: "AI-aware local version control",
+		Short: "Local version control for AI agentic coding",
 		Long: `Belay is an event-sourced filesystem journal that automatically
 captures every file change with AI session attribution.
 
@@ -37,7 +37,7 @@ attribute every change.`,
 		newSnapshotCmd(),
 		newRecordCmd(),
 		newRebuildIndexCmd(),
-		newClaudeCodeCmd(),
+		newAIInstructionsCmd(),
 		newHookCmd(),
 		newGitHooksCmd(),
 	)
