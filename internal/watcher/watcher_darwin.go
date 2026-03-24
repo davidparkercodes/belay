@@ -3,6 +3,7 @@
 package watcher
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -51,7 +52,9 @@ func (w *Watcher) Start() error {
 		Flags:   fsevents.FileEvents | fsevents.WatchRoot,
 	}
 
-	w.es.Start()
+	if err := w.es.Start(); err != nil {
+		return fmt.Errorf("fsevents start: %w", err)
+	}
 	w.health.setStatus(StatusRunning)
 	w.logger.Printf("watching %s via FSEvents (recursive, single stream)", w.cfg.ProjectRoot)
 
@@ -85,7 +88,7 @@ func (w *Watcher) Stop() error {
 }
 
 func (w *Watcher) Restart() error {
-	w.Stop()
+	_ = w.Stop()
 	w.resetForRestart()
 	w.filteredMu.Lock()
 	w.filteredSeen = make(map[string]bool)

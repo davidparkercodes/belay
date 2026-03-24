@@ -39,7 +39,6 @@ func Handler() http.Handler {
 
 		if _, err := fs.Stat(sub, path); err != nil {
 			r.URL.Path = "/"
-			path = "index.html"
 		}
 
 		fileServer.ServeHTTP(w, r)

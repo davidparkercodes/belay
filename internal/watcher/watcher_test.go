@@ -1299,7 +1299,7 @@ func TestWatcher_StartStop(t *testing.T) {
 
 	// Create a small directory tree so the watcher has something to watch.
 	for _, dir := range []string{"src", "cmd", "internal"} {
-		os.MkdirAll(filepath.Join(projectRoot, dir), 0755)
+		_ = os.MkdirAll(filepath.Join(projectRoot, dir), 0755)
 	}
 
 	objectsDir := filepath.Join(projectRoot, ".belay", "objects")
@@ -1343,7 +1343,7 @@ func TestWatcher_WatchedDirs(t *testing.T) {
 
 	// Create subdirectories.
 	for _, dir := range []string{"src", "cmd"} {
-		os.MkdirAll(filepath.Join(projectRoot, dir), 0755)
+		_ = os.MkdirAll(filepath.Join(projectRoot, dir), 0755)
 	}
 
 	objectsDir := filepath.Join(projectRoot, ".belay", "objects")
@@ -1434,7 +1434,7 @@ func TestWatcher_FileEventIntegration(t *testing.T) {
 	if err := w.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	t.Cleanup(func() { w.Stop() })
+	t.Cleanup(func() { _ = w.Stop() })
 
 	testFile := filepath.Join(projectRoot, "integration-test.txt")
 	if err := os.WriteFile(testFile, []byte("integration test content"), 0644); err != nil {
@@ -1507,7 +1507,7 @@ func TestWatcher_MultiFileIntegration(t *testing.T) {
 	if err := w.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	t.Cleanup(func() { w.Stop() })
+	t.Cleanup(func() { _ = w.Stop() })
 
 	wantFiles := map[string]bool{
 		"file-a.txt": false,
@@ -1597,7 +1597,7 @@ func TestWatcher_ModifyAndDeleteIntegration(t *testing.T) {
 	if err := w.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	t.Cleanup(func() { w.Stop() })
+	t.Cleanup(func() { _ = w.Stop() })
 
 	if err := os.WriteFile(testFile, []byte("modified content"), 0644); err != nil {
 		t.Fatalf("write modified: %v", err)

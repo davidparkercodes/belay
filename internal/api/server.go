@@ -510,7 +510,7 @@ func (s *Server) handleFileContent(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Write(data)
+	_, _ = w.Write(data)
 }
 
 func (s *Server) handleConflicts(w http.ResponseWriter, r *http.Request) {
@@ -742,7 +742,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rc := http.NewResponseController(w)
-	rc.SetWriteDeadline(time.Time{})
+	_ = rc.SetWriteDeadline(time.Time{})
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -817,7 +817,7 @@ func writeJSON(w http.ResponseWriter, data interface{}) {
 func writeError(w http.ResponseWriter, code int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(map[string]string{"error": message})
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
 // --- Rate Limiter ---
@@ -911,7 +911,7 @@ func rateLimitMiddleware(rl *rateLimiter, next http.Handler) http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Retry-After", "1")
 			w.WriteHeader(http.StatusTooManyRequests)
-			json.NewEncoder(w).Encode(map[string]string{
+			_ = json.NewEncoder(w).Encode(map[string]string{
 				"error": "rate limit exceeded",
 			})
 			return

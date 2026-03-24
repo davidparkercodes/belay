@@ -1416,7 +1416,7 @@ func gitCommit(t *testing.T, dir string, msg string) {
 
 func gitWorktreeAdd(t *testing.T, repoDir, worktreePath string) {
 	t.Helper()
-	os.MkdirAll(filepath.Dir(worktreePath), 0755)
+	_ = os.MkdirAll(filepath.Dir(worktreePath), 0755)
 	run(t, repoDir, "git", "worktree", "add", worktreePath)
 }
 
@@ -1428,7 +1428,7 @@ func gitWorktreeRemove(t *testing.T, repoDir, worktreePath string) {
 func writeFile(t *testing.T, dir, relPath string, content string) {
 	t.Helper()
 	absPath := filepath.Join(dir, relPath)
-	os.MkdirAll(filepath.Dir(absPath), 0755)
+	_ = os.MkdirAll(filepath.Dir(absPath), 0755)
 	if err := os.WriteFile(absPath, []byte(content), 0644); err != nil {
 		t.Fatalf("write %s: %v", relPath, err)
 	}
@@ -1637,7 +1637,7 @@ func TestChaos_WorktreeTracking(t *testing.T) {
 
 		for _, f := range editFiles {
 			modContent := []byte(fmt.Sprintf("AI edit by %s: %s v%d", wtName, f, tick))
-			os.WriteFile(filepath.Join(wtPath, f), modContent, 0644)
+			_ = os.WriteFile(filepath.Join(wtPath, f), modContent, 0644)
 
 			hash, _, putErr := objStore.Put(modContent)
 			if putErr != nil {
@@ -1965,7 +1965,7 @@ func TestChaos_WorktreeScaleBurst(t *testing.T) {
 		for ei := 0; ei < editsPerWorktree; ei++ {
 			f := initialFiles[(offset+ei*37)%len(initialFiles)]
 			modContent := []byte(fmt.Sprintf("edited by %s iteration %d", wtName, ei))
-			os.WriteFile(filepath.Join(wtPath, f), modContent, 0644)
+			_ = os.WriteFile(filepath.Join(wtPath, f), modContent, 0644)
 
 			hash, _, err := objStore.Put(modContent)
 			if err != nil {

@@ -165,7 +165,7 @@ func TestCorruption_PutWithReadOnlyDirectory(t *testing.T) {
 	if err := os.Chmod(dir, 0555); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	t.Cleanup(func() { os.Chmod(dir, 0755) })
+	t.Cleanup(func() { _ = os.Chmod(dir, 0755) })
 
 	data := []byte("cannot store this")
 	_, _, err = s.Put(data)
@@ -349,7 +349,7 @@ func TestCorruption_SizeWithCorruptStore(t *testing.T) {
 	defer s.Close()
 
 	data := []byte("for size calculation")
-	s.Put(data)
+	_, _, _ = s.Put(data)
 
 	// Create nested junk
 	nestedDir := filepath.Join(dir, "ab", "nested", "deep")

@@ -349,7 +349,7 @@ func TestCorruption_ReadOnlyDatabaseFile(t *testing.T) {
 	if err := os.Chmod(dbPath, 0444); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	t.Cleanup(func() { os.Chmod(dbPath, 0644) })
+	t.Cleanup(func() { _ = os.Chmod(dbPath, 0644) })
 
 	// Open with read-only file — should fail or succeed read-only
 	idx2, err := Open(dbPath)

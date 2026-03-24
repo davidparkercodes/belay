@@ -29,7 +29,7 @@ The ultimate time-travel feature.`,
 	cmd.Flags().String("file", "", "Show a single file at the given time")
 	cmd.Flags().Bool("ls", false, "Just list files that existed at that time")
 	cmd.Flags().Bool("json", false, "Output as JSON")
-	cmd.MarkFlagRequired("roughly-around")
+	_ = cmd.MarkFlagRequired("roughly-around")
 
 	return cmd
 }
@@ -183,7 +183,10 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 				fmt.Fprintf(os.Stderr, "warning: skipping %s: path escapes output directory\n", fs.Path)
 				continue
 			}
-			os.MkdirAll(filepath.Dir(outPath), 0755)
+			if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: cannot create dir for %s: %v\n", outPath, err)
+				continue
+			}
 			if err := os.WriteFile(outPath, data, 0644); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: cannot write %s: %v\n", outPath, err)
 				continue

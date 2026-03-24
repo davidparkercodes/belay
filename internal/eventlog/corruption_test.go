@@ -431,7 +431,7 @@ func TestCorruption_ReadSegmentWithOffsets_CorruptData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	f.Write([]byte("CORRUPT"))
+	_, _ = f.Write([]byte("CORRUPT"))
 	f.Close()
 
 	r, err := NewReader(dir)

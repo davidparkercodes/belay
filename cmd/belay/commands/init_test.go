@@ -43,7 +43,7 @@ func TestInitCmd_CreatesDirectoryStructure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
 	}
-	defer os.Chdir(oldWd)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
@@ -83,7 +83,7 @@ func TestInitCmd_CreatesConfigFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
 	}
-	defer os.Chdir(oldWd)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
@@ -118,7 +118,7 @@ func TestInitCmd_CreatesBelayignore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
 	}
-	defer os.Chdir(oldWd)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
@@ -153,7 +153,7 @@ func TestInitCmd_Idempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
 	}
-	defer os.Chdir(oldWd)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
@@ -183,7 +183,7 @@ func TestInitCmd_ForceReinitializes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
 	}
-	defer os.Chdir(oldWd)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
@@ -234,7 +234,7 @@ func TestInitCmd_AddsToGitignore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
 	}
-	defer os.Chdir(oldWd)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
@@ -271,7 +271,7 @@ func TestInitCmd_PreservesExistingBelayignore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
 	}
-	defer os.Chdir(oldWd)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
@@ -394,8 +394,8 @@ func TestDetectProjectTypes_Multiple(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create both Go and Node markers
-	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test"), 0644)
-	os.WriteFile(filepath.Join(dir, "package.json"), []byte("{}"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "package.json"), []byte("{}"), 0644)
 
 	types := detectProjectTypes(dir)
 	names := detectedTypeNames(types)
@@ -570,7 +570,7 @@ func TestInitCmd_NonInteractiveFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
 	}
-	defer os.Chdir(oldWd)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
@@ -608,7 +608,7 @@ func TestInitCmd_DetectsGoProject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
 	}
-	defer os.Chdir(oldWd)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)

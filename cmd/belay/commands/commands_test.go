@@ -544,7 +544,7 @@ func TestCommandHelp_ContainsUsage(t *testing.T) {
 			r.SetArgs([]string{name, "--help"})
 
 			// Execute through root so Cobra resolves the subcommand correctly
-			r.Execute()
+			_ = r.Execute()
 
 			output := buf.String()
 			if output == "" {

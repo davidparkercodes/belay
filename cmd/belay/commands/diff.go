@@ -288,11 +288,6 @@ func printDiffLines(old, new, path string) {
 	oldLines := strings.Split(old, "\n")
 	newLines := strings.Split(new, "\n")
 
-	maxLines := len(oldLines)
-	if len(newLines) > maxLines {
-		maxLines = len(newLines)
-	}
-
 	i, j := 0, 0
 	for i < len(oldLines) || j < len(newLines) {
 		if i < len(oldLines) && j < len(newLines) && oldLines[i] == newLines[j] {

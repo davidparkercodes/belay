@@ -190,8 +190,8 @@ func TestSize_AfterPuts(t *testing.T) {
 	data1 := []byte("first")
 	data2 := []byte("second")
 
-	s.Put(data1)
-	s.Put(data2)
+	_, _, _ = s.Put(data1)
+	_, _, _ = s.Put(data2)
 
 	_, count, err := s.Size()
 	if err != nil {
@@ -206,8 +206,8 @@ func TestSize_AfterDuplicate(t *testing.T) {
 	s := newTestStore(t, false)
 
 	data := []byte("same content")
-	s.Put(data)
-	s.Put(data) // duplicate
+	_, _, _ = s.Put(data)
+	_, _, _ = s.Put(data)
 
 	_, count, err := s.Size()
 	if err != nil {
@@ -738,10 +738,10 @@ func TestGet_UncompressedDataInCompressedStore(t *testing.T) {
 	// Directly copy the uncompressed file into the compressed store
 	srcPath := filepath.Join(sNoCompress.dir, hash[:2], hash[2:])
 	dstDir := filepath.Join(dir, hash[:2])
-	os.MkdirAll(dstDir, 0755)
+	_ = os.MkdirAll(dstDir, 0755)
 	dstPath := filepath.Join(dstDir, hash[2:])
 	raw, _ := os.ReadFile(srcPath)
-	os.WriteFile(dstPath, raw, 0644)
+	_ = os.WriteFile(dstPath, raw, 0644)
 
 	// The compressed store should fall back to raw data since decompression
 	// won't produce the expected hash, but raw data does
@@ -860,7 +860,7 @@ func TestConcurrentDeleteDuringRead(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			s.Delete(hashes[idx])
+			_ = s.Delete(hashes[idx])
 		}(i)
 	}
 
@@ -868,9 +868,7 @@ func TestConcurrentDeleteDuringRead(t *testing.T) {
 
 	// After all goroutines finish, deleted objects should not exist
 	for i := 0; i < numObjects; i += 2 {
-		if s.Has(hashes[i]) {
-			// Might still exist if Get raced — that's OK, but it shouldn't be guaranteed
-		}
+		s.Has(hashes[i])
 	}
 
 	// Non-deleted objects should still exist
@@ -892,7 +890,7 @@ func TestListHashes_AfterDelete(t *testing.T) {
 	hash1, _, _ := s.Put(data1)
 	hash2, _, _ := s.Put(data2)
 
-	s.Delete(hash1)
+	_ = s.Delete(hash1)
 
 	hashes, err := s.ListHashes()
 	if err != nil {
@@ -1332,17 +1330,17 @@ func TestListHashes_IgnoresNonDirEntries(t *testing.T) {
 
 	// Place a stray file directly in the store root (not a prefix dir)
 	strayFile := filepath.Join(s.dir, "stray-file.txt")
-	os.WriteFile(strayFile, []byte("stray"), 0644)
+	_ = os.WriteFile(strayFile, []byte("stray"), 0644)
 
 	// Place a directory with wrong name length (not 2 chars)
 	wrongDir := filepath.Join(s.dir, "abc")
-	os.MkdirAll(wrongDir, 0755)
-	os.WriteFile(filepath.Join(wrongDir, "somefile"), []byte("data"), 0644)
+	_ = os.MkdirAll(wrongDir, 0755)
+	_ = os.WriteFile(filepath.Join(wrongDir, "somefile"), []byte("data"), 0644)
 
 	// Place a single-char directory (not 2 chars)
 	shortDir := filepath.Join(s.dir, "x")
-	os.MkdirAll(shortDir, 0755)
-	os.WriteFile(filepath.Join(shortDir, "somefile"), []byte("data"), 0644)
+	_ = os.MkdirAll(shortDir, 0755)
+	_ = os.WriteFile(filepath.Join(shortDir, "somefile"), []byte("data"), 0644)
 
 	hashes, err := s.ListHashes()
 	if err != nil {
@@ -1374,7 +1372,7 @@ func TestListHashes_IgnoresTmpFiles(t *testing.T) {
 	// Create a .tmp- file in the same prefix dir
 	prefix := hash[:2]
 	tmpFile := filepath.Join(s.dir, prefix, ".tmp-leftover")
-	os.WriteFile(tmpFile, []byte("temp data"), 0644)
+	_ = os.WriteFile(tmpFile, []byte("temp data"), 0644)
 
 	hashes, err := s.ListHashes()
 	if err != nil {
@@ -1398,7 +1396,7 @@ func TestListHashes_IgnoresSubdirectories(t *testing.T) {
 	// Create a subdirectory inside a valid prefix dir
 	prefix := hash[:2]
 	subdir := filepath.Join(s.dir, prefix, "nested-dir")
-	os.MkdirAll(subdir, 0755)
+	_ = os.MkdirAll(subdir, 0755)
 
 	hashes, err := s.ListHashes()
 	if err != nil {
@@ -1448,9 +1446,9 @@ func TestGet_GzipDecompressesToWrongContent(t *testing.T) {
 	objPath := filepath.Join(s.dir, hash[:2], hash[2:])
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
-	gz.Write([]byte("different content that produces wrong hash"))
+	_, _ = gz.Write([]byte("different content that produces wrong hash"))
 	gz.Close()
-	os.WriteFile(objPath, buf.Bytes(), 0644)
+	_ = os.WriteFile(objPath, buf.Bytes(), 0644)
 
 	// Get should detect the hash mismatch after successful decompression
 	// The raw data (gzip bytes) won't match either
@@ -1476,7 +1474,7 @@ func TestVerify_CorruptedObject(t *testing.T) {
 
 	// Corrupt the file on disk
 	objPath := filepath.Join(s.dir, hash[:2], hash[2:])
-	os.WriteFile(objPath, []byte("corrupted!"), 0644)
+	_ = os.WriteFile(objPath, []byte("corrupted!"), 0644)
 
 	err = s.Verify(hash)
 	if err == nil {
@@ -1500,8 +1498,8 @@ func TestGet_ReadPermissionError(t *testing.T) {
 
 	// Make the file unreadable
 	objPath := filepath.Join(s.dir, hash[:2], hash[2:])
-	os.Chmod(objPath, 0000)
-	t.Cleanup(func() { os.Chmod(objPath, 0644) })
+	_ = os.Chmod(objPath, 0000)
+	t.Cleanup(func() { _ = os.Chmod(objPath, 0644) })
 
 	_, err = s.Get(hash)
 	if err == nil {
@@ -1528,7 +1526,7 @@ func TestGet_TruncatedGzipData(t *testing.T) {
 		// Keep gzip header (valid enough for NewReader) but truncate the body
 		// so ReadAll fails midway
 		truncated := validGzip[:10]
-		os.WriteFile(objPath, truncated, 0644)
+		_ = os.WriteFile(objPath, truncated, 0644)
 	}
 
 	// Get should handle the ReadAll error gracefully by falling back to raw data
@@ -1556,8 +1554,8 @@ func TestDelete_ErrorOnNonExistentDir(t *testing.T) {
 
 	// Make the prefix dir read-only so os.Remove of the file fails
 	prefixDir := filepath.Join(s.dir, hash[:2])
-	os.Chmod(prefixDir, 0555)
-	t.Cleanup(func() { os.Chmod(prefixDir, 0755) })
+	_ = os.Chmod(prefixDir, 0555)
+	t.Cleanup(func() { _ = os.Chmod(prefixDir, 0755) })
 
 	err = s.Delete(hash)
 	if err == nil {
@@ -1577,7 +1575,7 @@ func TestSize_ExcludesTmpFiles(t *testing.T) {
 	// Create a .tmp- file
 	prefix := hash[:2]
 	tmpFile := filepath.Join(s.dir, prefix, ".tmp-orphan")
-	os.WriteFile(tmpFile, []byte("tmp data that should be excluded"), 0644)
+	_ = os.WriteFile(tmpFile, []byte("tmp data that should be excluded"), 0644)
 
 	totalBytes, count, err := s.Size()
 	if err != nil {

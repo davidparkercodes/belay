@@ -246,7 +246,10 @@ func runReplay(cmd *cobra.Command, args []string) error {
 				fmt.Fprintf(os.Stderr, "warning: skipping %s: path escapes output directory\n", path)
 				continue
 			}
-			os.MkdirAll(filepath.Dir(outPath), 0755)
+			if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: cannot create dir for %s: %v\n", outPath, err)
+				continue
+			}
 			if err := os.WriteFile(outPath, data, 0644); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: cannot write %s: %v\n", outPath, err)
 				continue

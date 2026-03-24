@@ -158,7 +158,7 @@ func (idx *Index) IndexEventBatch(events []struct {
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	stmt, err := tx.Prepare(`
 		INSERT OR REPLACE INTO events (
@@ -696,7 +696,7 @@ func (idx *Index) DeleteEventsBatch(eventIDs []string) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	stmt, err := tx.Prepare("DELETE FROM events WHERE event_id = ?")
 	if err != nil {

@@ -39,7 +39,7 @@ func TestMapFSEventOp_RenamedExists(t *testing.T) {
 	// When a file is renamed but the path still exists, treat as modify.
 	tmp := t.TempDir()
 	f := filepath.Join(tmp, "exists.go")
-	os.WriteFile(f, []byte("x"), 0644)
+	_ = os.WriteFile(f, []byte("x"), 0644)
 
 	got := mapFSEventOp(fsevents.ItemRenamed, f)
 	if got != schema.OpModify {

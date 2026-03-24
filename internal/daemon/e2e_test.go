@@ -188,7 +188,7 @@ func TestE2E_DaemonInitAndCleanup(t *testing.T) {
 	}
 
 	// Cleanup — call each exactly once (no t.Cleanup to avoid double-close panics)
-	d.watcher.Stop()
+	_ = d.watcher.Stop()
 	d.registry.Stop()
 	d.removePID()
 
@@ -212,7 +212,7 @@ func TestE2E_FileChangeCapture(t *testing.T) {
 	if err := d.watcher.Start(); err != nil {
 		t.Fatalf("watcher.Start: %v", err)
 	}
-	defer d.watcher.Stop()
+	defer func() { _ = d.watcher.Stop() }()
 
 	// Create a subdirectory first (FSEvents sometimes has issues with root dir events)
 	srcDir := filepath.Join(cfg.ProjectRoot, "src")
@@ -480,10 +480,10 @@ func TestE2E_SessionAttribution(t *testing.T) {
 
 	// Wire session lifecycle callbacks
 	d.registry.SetOnSessionStart(func(s *schema.Session) {
-		d.idx.UpsertSession(s)
+		_ = d.idx.UpsertSession(s)
 	})
 	d.registry.SetOnSessionEnd(func(s *schema.Session) {
-		d.idx.UpsertSession(s)
+		_ = d.idx.UpsertSession(s)
 	})
 
 	d.registry.Start()
@@ -661,18 +661,15 @@ func TestE2E_APIEndpoints(t *testing.T) {
 
 	// Start the API server on a random port
 	cfg.API.Port = 0 // let the system pick a port
-	apiServer := api.New(cfg, d.idx, d.objStore, d.registry, d.logger, d.HandleRecordedEvent, "test", nil)
+	_ = api.New(cfg, d.idx, d.objStore, d.registry, d.logger, d.HandleRecordedEvent, "test", nil)
 
-	// We need a real port, so let the server choose one by setting port to 0
-	// The belay API server binds to the configured port, so we'll use a known free port.
-	// Use a high ephemeral port that's likely free.
 	cfg.API.Port = findFreePort(t)
-	apiServer = api.New(cfg, d.idx, d.objStore, d.registry, d.logger, d.HandleRecordedEvent, "test", nil)
+	apiServer := api.New(cfg, d.idx, d.objStore, d.registry, d.logger, d.HandleRecordedEvent, "test", nil)
 
 	if err := apiServer.Start(); err != nil {
 		t.Fatalf("API Start: %v", err)
 	}
-	t.Cleanup(func() { apiServer.Stop() })
+	t.Cleanup(func() { _ = apiServer.Stop() })
 
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", cfg.API.Port)
 	client := &http.Client{Timeout: 5 * time.Second}
@@ -740,7 +737,7 @@ func TestE2E_APIEndpoints(t *testing.T) {
 			t.Errorf("status = %d, want 200", resp.StatusCode)
 		}
 		var body map[string]interface{}
-		json.NewDecoder(resp.Body).Decode(&body)
+		_ = json.NewDecoder(resp.Body).Decode(&body)
 		count, ok := body["count"].(float64)
 		if !ok || count < 1 {
 			t.Errorf("expected at least 1 session, got %v", body["count"])
@@ -771,7 +768,7 @@ func TestE2E_APIEndpoints(t *testing.T) {
 			t.Errorf("status = %d, want 200", resp.StatusCode)
 		}
 		var body map[string]interface{}
-		json.NewDecoder(resp.Body).Decode(&body)
+		_ = json.NewDecoder(resp.Body).Decode(&body)
 		totalEvents, ok := body["total_events"].(float64)
 		if !ok || totalEvents < 1 {
 			t.Errorf("expected total_events >= 1, got %v", body["total_events"])
@@ -789,7 +786,7 @@ func TestE2E_APIEndpoints(t *testing.T) {
 			t.Errorf("status = %d, want 200", resp.StatusCode)
 		}
 		var body map[string]interface{}
-		json.NewDecoder(resp.Body).Decode(&body)
+		_ = json.NewDecoder(resp.Body).Decode(&body)
 		count, ok := body["count"].(float64)
 		if !ok || count < 1 {
 			t.Errorf("expected count >= 1 for file history, got %v", body["count"])
@@ -829,7 +826,7 @@ func TestE2E_APIEndpoints(t *testing.T) {
 		}
 
 		var result map[string]interface{}
-		json.NewDecoder(resp.Body).Decode(&result)
+		_ = json.NewDecoder(resp.Body).Decode(&result)
 		if result["status"] != "recorded" {
 			t.Errorf("record status = %v, want %q", result["status"], "recorded")
 		}

@@ -205,7 +205,7 @@ func (d *Daemon) init() error {
 			},
 		}
 		metaEvent.SetTimestamp(time.Now())
-		d.logWriter.Append(metaEvent)
+		_ = d.logWriter.Append(metaEvent)
 	})
 
 	d.registry.SetOnSessionEnd(func(s *schema.Session) {
@@ -227,7 +227,7 @@ func (d *Daemon) init() error {
 			},
 		}
 		metaEvent.SetTimestamp(time.Now())
-		d.logWriter.Append(metaEvent)
+		_ = d.logWriter.Append(metaEvent)
 
 		d.sessionFilesMu.Lock()
 		delete(d.sessionFiles, s.SessionID)
@@ -327,7 +327,7 @@ func (d *Daemon) processEvent(event *schema.Event) {
 			s.FilesChanged++
 		}
 		d.trackSessionFile(event.SessionID, event.FilePath)
-		d.idx.UpsertSession(s)
+		_ = d.idx.UpsertSession(s)
 	}
 
 	if d.apiServer != nil {

@@ -273,9 +273,9 @@ func TestReader_ReadFrom(t *testing.T) {
 	event1 := makeEvent("from-1.go", schema.OpCreate)
 	event2 := makeEvent("from-2.go", schema.OpModify)
 
-	w.Append(event1)
+	_ = w.Append(event1)
 	offsetAfterFirst := w.CurrentOffset()
-	w.Append(event2)
+	_ = w.Append(event2)
 
 	r := newTestReader(t, dir)
 	segment := w.CurrentSegment()
@@ -300,7 +300,7 @@ func TestReader_ReadFrom_BeyondEnd(t *testing.T) {
 	w, dir := newTestWriter(t, 10*1024*1024)
 
 	event := makeEvent("beyond.go", schema.OpCreate)
-	w.Append(event)
+	_ = w.Append(event)
 
 	r := newTestReader(t, dir)
 	segment := w.CurrentSegment()
@@ -326,7 +326,7 @@ func TestReader_ReadSegmentWithOffsets(t *testing.T) {
 	}
 
 	for _, e := range events {
-		w.Append(e)
+		_ = w.Append(e)
 	}
 
 	r := newTestReader(t, dir)
@@ -672,7 +672,6 @@ func TestWriter_SegmentFilenameCollision(t *testing.T) {
 
 	// Now create many writers in rapid succession with tiny segment sizes
 	// to force same-second segment creation, triggering the suffix loop
-	var segments []string
 	for i := 0; i < 5; i++ {
 		w, err := NewWriter(dir, 1) // 1 byte max = every event triggers rotation
 		if err != nil {
@@ -682,7 +681,6 @@ func TestWriter_SegmentFilenameCollision(t *testing.T) {
 		if err := w.Append(event); err != nil {
 			t.Fatalf("Append %d: %v", i, err)
 		}
-		segments = append(segments, w.CurrentSegment())
 		w.Close()
 	}
 
@@ -869,7 +867,7 @@ func TestWriter_GettersThreadSafety(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			event := makeEvent(fmt.Sprintf("thread-safe-%d.go", idx), schema.OpModify)
-			w.Append(event)
+			_ = w.Append(event)
 		}(i)
 		go func() {
 			defer wg.Done()
@@ -908,7 +906,7 @@ func TestReader_ReadSegment_CorruptedData(t *testing.T) {
 		t.Fatalf("open segment for corruption: %v", err)
 	}
 	// Append partial frame header (not enough for a full frame)
-	f.Write([]byte{0x00, 0x00, 0x00, 0x50}) // frame length says 80 bytes but no body follows
+	_, _ = f.Write([]byte{0x00, 0x00, 0x00, 0x50})
 	f.Close()
 
 	// Reader should return the valid events and stop at the corrupted part
@@ -1156,7 +1154,7 @@ func TestReader_ReadSegmentWithOffsets_CorruptedData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	f.Write([]byte{0x00, 0x00, 0x01, 0x00}) // says 256 bytes but file ends
+	_, _ = f.Write([]byte{0x00, 0x00, 0x01, 0x00})
 	f.Close()
 
 	r := newTestReader(t, dir)
@@ -1238,7 +1236,7 @@ func TestReader_ReadFrom_ExactOffset(t *testing.T) {
 	w, dir := newTestWriter(t, 10*1024*1024)
 
 	e1 := makeEvent("exact-1.go", schema.OpCreate)
-	w.Append(e1)
+	_ = w.Append(e1)
 	totalSize := w.CurrentOffset()
 
 	seg := w.CurrentSegment()
@@ -1301,7 +1299,7 @@ func TestReader_ReadSegment_ValidThenCorruptEvents(t *testing.T) {
 	binary.BigEndian.PutUint32(badFrame[0:4], 20) // totalLen = 20
 	binary.BigEndian.PutUint16(badFrame[4:6], 99)  // bad version
 	// rest is zeros (will fail checksum too)
-	f.Write(badFrame)
+	_, _ = f.Write(badFrame)
 	f.Close()
 
 	r := newTestReader(t, dir)
@@ -1517,7 +1515,7 @@ func TestReader_ReadAll_UnreadableSegment(t *testing.T) {
 	if err := os.Chmod(segPath, 0000); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	t.Cleanup(func() { os.Chmod(segPath, 0644) })
+	t.Cleanup(func() { _ = os.Chmod(segPath, 0644) })
 
 	// ReadAll should hit the error branch in ReadSegment (os.ReadFile fails)
 	// and then the error/continue branch in ReadAll
@@ -1548,7 +1546,7 @@ func TestWriter_NewWriter_OpenSegmentError(t *testing.T) {
 	if err := os.Chmod(segPath, 0000); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	t.Cleanup(func() { os.Chmod(segPath, 0644) })
+	t.Cleanup(func() { _ = os.Chmod(segPath, 0644) })
 
 	// NewWriter should fail trying to open the existing segment
 	_, err = NewWriter(dir, 10*1024*1024)
@@ -1631,7 +1629,7 @@ func TestReader_ReadAll_SegmentsError(t *testing.T) {
 	if err := os.Chmod(dir, 0000); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	t.Cleanup(func() { os.Chmod(dir, 0755) })
+	t.Cleanup(func() { _ = os.Chmod(dir, 0755) })
 
 	_, err = r.ReadAll()
 	if err == nil {
@@ -1643,10 +1641,10 @@ func TestReader_ReadFrom_CorruptedData(t *testing.T) {
 	w, dir := newTestWriter(t, 10*1024*1024)
 
 	e1 := makeEvent("from-corrupt-1.go", schema.OpCreate)
-	w.Append(e1)
+	_ = w.Append(e1)
 	offsetAfterFirst := w.CurrentOffset()
 	e2 := makeEvent("from-corrupt-2.go", schema.OpModify)
-	w.Append(e2)
+	_ = w.Append(e2)
 	seg := w.CurrentSegment()
 	w.Close()
 
@@ -1658,7 +1656,7 @@ func TestReader_ReadFrom_CorruptedData(t *testing.T) {
 		data[offsetAfterFirst+6] ^= 0xFF
 		data[offsetAfterFirst+7] ^= 0xFF
 	}
-	os.WriteFile(segPath, data, 0644)
+	_ = os.WriteFile(segPath, data, 0644)
 
 	r := newTestReader(t, dir)
 	// ReadFrom starting at the corrupted second event

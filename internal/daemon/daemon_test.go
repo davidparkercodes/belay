@@ -1489,8 +1489,8 @@ func TestStop_SendsSIGTERM(t *testing.T) {
 	childPID := cmd.Process.Pid
 	defer func() {
 		// Ensure cleanup even if test fails
-		cmd.Process.Kill()
-		cmd.Wait()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 	}()
 
 	// Write the child's PID to the PID file
@@ -1513,5 +1513,5 @@ func TestStop_SendsSIGTERM(t *testing.T) {
 	}
 
 	// Wait for the child to exit (it should die from SIGTERM)
-	cmd.Wait()
+	_ = cmd.Wait()
 }

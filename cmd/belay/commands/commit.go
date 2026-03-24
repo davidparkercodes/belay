@@ -29,7 +29,7 @@ This bridges Belay's event store to git's commit model.`,
 	cmd.Flags().Bool("dry-run", false, "Show what would be committed")
 	cmd.Flags().Bool("execute", false, "Actually create the git commit (requires safety.allow_writes in config)")
 	cmd.Flags().Bool("no-metadata", false, "Skip Belay trailers in commit message")
-	cmd.MarkFlagRequired("session")
+	_ = cmd.MarkFlagRequired("session")
 
 	return cmd
 }

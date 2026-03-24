@@ -717,7 +717,7 @@ func TestFindProjectRoot_InBelayProject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
 	}
-	defer os.Chdir(oldWd)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
@@ -755,7 +755,7 @@ func TestFindProjectRoot_FromNestedSubdirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
 	}
-	defer os.Chdir(oldWd)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	if err := os.Chdir(nested); err != nil {
 		t.Fatalf("Chdir: %v", err)
@@ -779,7 +779,7 @@ func TestFindProjectRoot_NoBelay_ReturnsError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
 	}
-	defer os.Chdir(oldWd)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
@@ -807,7 +807,7 @@ func TestFindProjectRoot_BelayIsFile_NotDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
 	}
-	defer os.Chdir(oldWd)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
@@ -845,7 +845,7 @@ func TestFindProjectRoot_FindsNearestBelay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
 	}
-	defer os.Chdir(oldWd)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	if err := os.Chdir(deepNested); err != nil {
 		t.Fatalf("Chdir: %v", err)
@@ -890,7 +890,7 @@ func TestFindProjectRoot_SymlinkedBelay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
 	}
-	defer os.Chdir(oldWd)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	if err := os.Chdir(project); err != nil {
 		t.Fatalf("Chdir: %v", err)
@@ -1060,7 +1060,7 @@ func TestLoad_PermissionDenied(t *testing.T) {
 		t.Fatalf("Chmod: %v", err)
 	}
 	t.Cleanup(func() {
-		os.Chmod(configPath, 0o644) // restore so TempDir cleanup works
+		_ = os.Chmod(configPath, 0o644)
 	})
 
 	_, err := Load(dir)

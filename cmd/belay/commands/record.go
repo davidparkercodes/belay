@@ -109,7 +109,7 @@ func recordViaAPI(port int, req *recordRequest) error {
 
 	if resp.StatusCode != http.StatusOK {
 		var errResp map[string]string
-		json.NewDecoder(resp.Body).Decode(&errResp)
+		_ = json.NewDecoder(resp.Body).Decode(&errResp)
 		return fmt.Errorf("API error %d: %s", resp.StatusCode, errResp["error"])
 	}
 

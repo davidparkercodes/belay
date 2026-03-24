@@ -898,8 +898,8 @@ func TestCommitSession_Execute_ModifyFile(t *testing.T) {
 	if err := os.WriteFile(origPath, []byte(origContent), 0644); err != nil {
 		t.Fatalf("write original: %v", err)
 	}
-	gitCmd(f.projectDir, "add", "existing.go")
-	gitCmd(f.projectDir, "commit", "-m", "add existing.go")
+	_, _ = gitCmd(f.projectDir, "add", "existing.go")
+	_, _ = gitCmd(f.projectDir, "commit", "-m", "add existing.go")
 
 	// Set up belay events for modify
 	sessionID := "exec-modify"
@@ -936,8 +936,8 @@ func TestCommitSession_Execute_DeleteFile(t *testing.T) {
 	if err := os.WriteFile(delPath, []byte("delete me"), 0644); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
-	gitCmd(f.projectDir, "add", "to-delete.go")
-	gitCmd(f.projectDir, "commit", "-m", "add to-delete.go")
+	_, _ = gitCmd(f.projectDir, "add", "to-delete.go")
+	_, _ = gitCmd(f.projectDir, "commit", "-m", "add to-delete.go")
 
 	sessionID := "exec-delete"
 	hashOld := f.putContent("delete me")
@@ -1690,23 +1690,23 @@ func TestImportHistory_ImportsCommits(t *testing.T) {
 	if err := os.WriteFile(filePath, []byte("package main\n"), 0644); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
-	gitCmd(f.projectDir, "add", "imported.go")
-	gitCmd(f.projectDir, "commit", "-m", "add imported.go")
+	_, _ = gitCmd(f.projectDir, "add", "imported.go")
+	_, _ = gitCmd(f.projectDir, "commit", "-m", "add imported.go")
 
 	// Commit 2: modify file
 	if err := os.WriteFile(filePath, []byte("package main\n\nfunc main() {}\n"), 0644); err != nil {
 		t.Fatalf("modify file: %v", err)
 	}
-	gitCmd(f.projectDir, "add", "imported.go")
-	gitCmd(f.projectDir, "commit", "-m", "update imported.go")
+	_, _ = gitCmd(f.projectDir, "add", "imported.go")
+	_, _ = gitCmd(f.projectDir, "commit", "-m", "update imported.go")
 
 	// Commit 3: add another file
 	file2Path := filepath.Join(f.projectDir, "helper.go")
 	if err := os.WriteFile(file2Path, []byte("package main\n\nfunc helper() {}\n"), 0644); err != nil {
 		t.Fatalf("write file2: %v", err)
 	}
-	gitCmd(f.projectDir, "add", "helper.go")
-	gitCmd(f.projectDir, "commit", "-m", "add helper.go")
+	_, _ = gitCmd(f.projectDir, "add", "helper.go")
+	_, _ = gitCmd(f.projectDir, "commit", "-m", "add helper.go")
 
 	// Use a fresh index for import
 	importDBPath := filepath.Join(f.tmpDir, "import-index.db")
@@ -1776,8 +1776,8 @@ func TestImportHistory_WithSinceFilter(t *testing.T) {
 	if err := os.WriteFile(filePath, []byte("recent\n"), 0644); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
-	gitCmd(f.projectDir, "add", "recent.go")
-	gitCmd(f.projectDir, "commit", "-m", "add recent.go")
+	_, _ = gitCmd(f.projectDir, "add", "recent.go")
+	_, _ = gitCmd(f.projectDir, "commit", "-m", "add recent.go")
 
 	importDBPath := filepath.Join(f.tmpDir, "since-index.db")
 	importIdx, err := index.Open(importDBPath)
@@ -1815,13 +1815,13 @@ func TestImportHistory_DeletedFile(t *testing.T) {
 	if err := os.WriteFile(filePath, []byte("remove me\n"), 0644); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
-	gitCmd(f.projectDir, "add", "to-remove.go")
-	gitCmd(f.projectDir, "commit", "-m", "add to-remove.go")
+	_, _ = gitCmd(f.projectDir, "add", "to-remove.go")
+	_, _ = gitCmd(f.projectDir, "commit", "-m", "add to-remove.go")
 
 	// Delete and commit
 	os.Remove(filePath)
-	gitCmd(f.projectDir, "add", "to-remove.go")
-	gitCmd(f.projectDir, "commit", "-m", "remove to-remove.go")
+	_, _ = gitCmd(f.projectDir, "add", "to-remove.go")
+	_, _ = gitCmd(f.projectDir, "commit", "-m", "remove to-remove.go")
 
 	importDBPath := filepath.Join(f.tmpDir, "del-index.db")
 	importIdx, err := index.Open(importDBPath)
@@ -1870,12 +1870,12 @@ func TestImportHistory_RenamedFile(t *testing.T) {
 	if err := os.WriteFile(filePath, []byte("renamed content\n"), 0644); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
-	gitCmd(f.projectDir, "add", "old-name.go")
-	gitCmd(f.projectDir, "commit", "-m", "add old-name.go")
+	_, _ = gitCmd(f.projectDir, "add", "old-name.go")
+	_, _ = gitCmd(f.projectDir, "commit", "-m", "add old-name.go")
 
 	// Rename via git mv
-	gitCmd(f.projectDir, "mv", "old-name.go", "new-name.go")
-	gitCmd(f.projectDir, "commit", "-m", "rename old-name.go to new-name.go")
+	_, _ = gitCmd(f.projectDir, "mv", "old-name.go", "new-name.go")
+	_, _ = gitCmd(f.projectDir, "commit", "-m", "rename old-name.go to new-name.go")
 
 	importDBPath := filepath.Join(f.tmpDir, "rename-index.db")
 	importIdx, err := index.Open(importDBPath)
@@ -1911,8 +1911,8 @@ func TestImportHistory_ContentStoredInObjectStore(t *testing.T) {
 	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
-	gitCmd(f.projectDir, "add", "stored.go")
-	gitCmd(f.projectDir, "commit", "-m", "add stored.go")
+	_, _ = gitCmd(f.projectDir, "add", "stored.go")
+	_, _ = gitCmd(f.projectDir, "commit", "-m", "add stored.go")
 
 	importDBPath := filepath.Join(f.tmpDir, "content-index.db")
 	importIdx, err := index.Open(importDBPath)
@@ -1972,14 +1972,14 @@ func TestImportHistory_ModifyHasPreviousHash(t *testing.T) {
 	if err := os.WriteFile(filePath, []byte("version 1\n"), 0644); err != nil {
 		t.Fatalf("write v1: %v", err)
 	}
-	gitCmd(f.projectDir, "add", "versioned.go")
-	gitCmd(f.projectDir, "commit", "-m", "add versioned.go v1")
+	_, _ = gitCmd(f.projectDir, "add", "versioned.go")
+	_, _ = gitCmd(f.projectDir, "commit", "-m", "add versioned.go v1")
 
 	if err := os.WriteFile(filePath, []byte("version 2\n"), 0644); err != nil {
 		t.Fatalf("write v2: %v", err)
 	}
-	gitCmd(f.projectDir, "add", "versioned.go")
-	gitCmd(f.projectDir, "commit", "-m", "update versioned.go to v2")
+	_, _ = gitCmd(f.projectDir, "add", "versioned.go")
+	_, _ = gitCmd(f.projectDir, "commit", "-m", "update versioned.go to v2")
 
 	importDBPath := filepath.Join(f.tmpDir, "prev-index.db")
 	importIdx, err := index.Open(importDBPath)
