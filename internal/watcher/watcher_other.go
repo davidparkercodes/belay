@@ -124,7 +124,7 @@ func (w *Watcher) Stop() error {
 }
 
 func (w *Watcher) Restart() error {
-	w.Stop()
+	_ = w.Stop()
 	w.resetForRestart()
 	return w.Start()
 }
@@ -170,7 +170,7 @@ func (w *Watcher) handleRawEvent(event fsnotify.Event) {
 	if event.Has(fsnotify.Create) {
 		if info, err := os.Stat(path); err == nil && info.IsDir() {
 			if !w.matcher.ShouldIgnore(relPath + "/") {
-				w.fsw.Add(path)
+				_ = w.fsw.Add(path)
 			}
 			return
 		}

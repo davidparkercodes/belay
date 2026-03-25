@@ -51,7 +51,11 @@ func getProcessCwd(pid int) string {
 
 	for _, line := range strings.Split(string(out), "\n") {
 		if strings.HasPrefix(line, "n") {
-			return line[1:]
+			path := line[1:]
+			if strings.Contains(path, "(") {
+				return ""
+			}
+			return path
 		}
 	}
 	return ""
