@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 env:
-  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   test:
@@ -34,11 +34,17 @@ jobs:
       - name: Test
         shell: bash
         run: |
+          echo "::stop-commands::end-test-output"
+          set +e
           if [ "$RUNNER_OS" = "macOS" ]; then
             go test ./... -v -race -coverprofile=coverage.txt
           else
             CGO_ENABLED=0 go test ./... -v -coverprofile=coverage.txt
           fi
+          EXIT_CODE=$?
+          set -e
+          echo "::end-test-output::"
+          exit $EXIT_CODE
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest'
         continue-on-error: true
