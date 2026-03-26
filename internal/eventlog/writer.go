@@ -103,11 +103,13 @@ func (w *Writer) Close() error {
 	defer w.mu.Unlock()
 
 	if w.currentFile != nil {
-		if err := w.currentFile.Sync(); err != nil {
-			w.currentFile.Close()
+		f := w.currentFile
+		w.currentFile = nil
+		if err := f.Sync(); err != nil {
+			f.Close()
 			return fmt.Errorf("sync on close: %w", err)
 		}
-		return w.currentFile.Close()
+		return f.Close()
 	}
 	return nil
 }
