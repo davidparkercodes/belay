@@ -113,6 +113,7 @@ curl -X POST http://localhost:33412/api/record \
 | Command | Description |
 |---------|-------------|
 | `belay init` | Initialize `.belay/` in the current directory |
+| `belay remove` | Remove Belay from the current directory (opposite of init) |
 | `belay daemon start` | Start the background watcher daemon |
 | `belay daemon stop` | Stop the daemon |
 | `belay status` | System and session overview |

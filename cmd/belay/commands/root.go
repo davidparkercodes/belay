@@ -24,6 +24,7 @@ attribute every change.`,
 
 	cmd.AddCommand(
 		newInitCmd(),
+		newRemoveCmd(),
 		newStatusCmd(),
 		newDaemonCmd(version),
 		newLogCmd(),

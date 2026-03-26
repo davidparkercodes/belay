@@ -484,6 +484,30 @@ func TestSnapshotCmd_AtFlagRequired(t *testing.T) {
 	}
 }
 
+// --- Remove command tests ---
+
+func TestRemoveCmd_BasicProperties(t *testing.T) {
+	cmd := newRemoveCmd()
+
+	if cmd.Use != "remove" {
+		t.Errorf("Use = %q, want %q", cmd.Use, "remove")
+	}
+	if cmd.Short == "" {
+		t.Error("Short description should not be empty")
+	}
+	if cmd.Long == "" {
+		t.Error("Long description should not be empty")
+	}
+}
+
+func TestRemoveCmd_Flags(t *testing.T) {
+	cmd := newRemoveCmd()
+
+	assertFlags(t, cmd, []cmdTestCase{
+		{"force", "false"},
+	})
+}
+
 // --- Cross-cutting tests ---
 
 func TestAllCommandsHaveShortDescription(t *testing.T) {
