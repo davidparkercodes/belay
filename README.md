@@ -44,9 +44,12 @@ Belay is a single static binary with zero runtime dependencies.
 ## Quick Start
 
 ```bash
-belay init            # Initialize in your project
-belay daemon start    # Start background watcher
+belay init
 ```
+
+<p align="center">
+  <img src="docs/belay-init.png" alt="belay init" width="600" />
+</p>
 
 That's it. Belay is now capturing every file change. Go back to work.
 
