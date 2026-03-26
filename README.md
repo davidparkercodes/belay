@@ -69,6 +69,8 @@ Session attribution works automatically via process-tree heuristics, or with exa
 
 ### Claude Code
 
+Belay attributes changes to sessions automatically via process-tree heuristics, but adding the hook gives exact attribution. It fires after every file write, telling Belay precisely which session made the change.
+
 Add the hook to your Claude Code settings (`~/.claude/settings.json`):
 
 ```json
@@ -93,7 +95,7 @@ The hook reads tool use JSON from stdin, extracts the file path and session ID, 
 
 ### Any Tool
 
-Push events via the REST API:
+For AI tools that don't support hooks, or custom integrations, push change events directly via the REST API:
 
 ```bash
 curl -X POST http://localhost:33412/api/record \
