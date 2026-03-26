@@ -41,6 +41,8 @@ cd belay && go build -o bin/belay ./cmd/belay
 
 Belay is a single static binary with zero runtime dependencies.
 
+> **Windows note:** Belay builds and runs on Windows but has not been tested in real-world use. macOS and Linux are the primary platforms. If you're a Windows user and want to help, we'd love testers. [Open an issue](https://github.com/davidparkercodes/belay/issues) with your experience.
+
 ## Quick Start
 
 ```bash
