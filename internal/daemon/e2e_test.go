@@ -95,7 +95,7 @@ func e2eSubsystems(t *testing.T) (*Daemon, *config.Config) {
 		matcher:      matcher,
 		watcher:      w,
 		registry:     registry,
-		logger:       log.New(os.Stderr, "[belay-test] ", log.LstdFlags),
+		logger:       log.New(io.Discard, "", 0),
 		sessionFiles: make(map[string]map[string]bool),
 	}
 

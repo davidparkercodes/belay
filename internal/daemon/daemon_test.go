@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -59,7 +60,7 @@ func testDaemonWithSubsystems(t *testing.T) *Daemon {
 
 	d := &Daemon{
 		cfg:          cfg,
-		logger:       log.New(os.Stderr, "[belay-test] ", log.LstdFlags),
+		logger:       log.New(io.Discard, "", 0),
 		logWriter:    logWriter,
 		idx:          idx,
 		registry:     registry,
@@ -155,7 +156,7 @@ func testDaemonWithAttribution(t *testing.T) *Daemon {
 
 	d := &Daemon{
 		cfg:          cfg,
-		logger:       log.New(os.Stderr, "[belay-test] ", log.LstdFlags),
+		logger:       log.New(io.Discard, "", 0),
 		logWriter:    logWriter,
 		idx:          idx,
 		registry:     registry,
