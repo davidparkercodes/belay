@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -113,7 +112,7 @@ type watcherBase struct {
 
 	logger  *log.Logger
 	health  *healthState
-	wtCache *worktreeCache
+	wtTracker *worktreeTracker
 
 	fsRawCount   int64
 	fsQueueCount int64
@@ -129,7 +128,7 @@ func initBase(wb *watcherBase, cfg *config.Config, objStore *store.Store, matche
 	wb.done = make(chan struct{})
 	wb.logger = log.New(os.Stderr, "[belay-watcher] ", log.LstdFlags)
 	wb.health = &healthState{status: StatusStopped}
-	wb.wtCache = newWorktreeCache(3 * time.Second)
+	wb.wtTracker = newWorktreeTracker(10 * time.Second)
 }
 
 func (b *watcherBase) Health() WatcherHealth {
@@ -230,8 +229,7 @@ func (b *watcherBase) processFileEvent(pe *pendingEvent) {
 
 	if pe.op != schema.OpDelete {
 		if err := b.captureContent(absPath, event); err != nil {
-			b.logger.Printf("warning: cannot capture %s: %v", pe.path, err)
-			return
+			b.logger.Printf("warning: content capture failed for %s: %v", pe.path, err)
 		}
 	}
 
@@ -283,81 +281,34 @@ func (b *watcherBase) shouldIgnoreRel(relPath string) bool {
 
 const worktreePrefix = ".claude/worktrees/"
 
-type worktreeCache struct {
-	mu         sync.RWMutex
-	dirtyFiles map[string]map[string]bool
-	lastCheck  map[string]time.Time
-	ttl        time.Duration
+type worktreeTracker struct {
+	mu          sync.RWMutex
+	firstSeen   map[string]time.Time
+	burstWindow time.Duration
 }
 
-func newWorktreeCache(ttl time.Duration) *worktreeCache {
-	return &worktreeCache{
-		dirtyFiles: make(map[string]map[string]bool),
-		lastCheck:  make(map[string]time.Time),
-		ttl:        ttl,
+func newWorktreeTracker(burstWindow time.Duration) *worktreeTracker {
+	return &worktreeTracker{
+		firstSeen:   make(map[string]time.Time),
+		burstWindow: burstWindow,
 	}
 }
 
-func (wc *worktreeCache) isDirty(worktreeName, fileRelPath string) bool {
-	wc.mu.RLock()
-	defer wc.mu.RUnlock()
-	if files, ok := wc.dirtyFiles[worktreeName]; ok {
-		return files[fileRelPath]
-	}
-	return false
-}
-
-func (wc *worktreeCache) refresh(worktreeName, worktreeAbsPath string) {
-	dirty := make(map[string]bool)
-
-	diffCmd := exec.Command("git", "-C", worktreeAbsPath, "diff", "--name-only")
-	if out, err := diffCmd.Output(); err == nil {
-		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			if line != "" {
-				dirty[line] = true
-			}
-		}
-	}
-
-	diffStagedCmd := exec.Command("git", "-C", worktreeAbsPath, "diff", "--name-only", "--staged")
-	if out, err := diffStagedCmd.Output(); err == nil {
-		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			if line != "" {
-				dirty[line] = true
-			}
-		}
-	}
-
-	untrackedCmd := exec.Command("git", "-C", worktreeAbsPath, "ls-files", "--others", "--exclude-standard")
-	if out, err := untrackedCmd.Output(); err == nil {
-		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			if line != "" {
-				dirty[line] = true
-			}
-		}
-	}
-
-	wc.mu.Lock()
-	wc.dirtyFiles[worktreeName] = dirty
-	wc.lastCheck[worktreeName] = time.Now()
-	wc.mu.Unlock()
-}
-
-func (wc *worktreeCache) needsRefresh(worktreeName string) bool {
-	wc.mu.RLock()
-	defer wc.mu.RUnlock()
-	last, ok := wc.lastCheck[worktreeName]
+func (wt *worktreeTracker) isInBurstWindow(worktreeName string) bool {
+	wt.mu.Lock()
+	defer wt.mu.Unlock()
+	first, ok := wt.firstSeen[worktreeName]
 	if !ok {
+		wt.firstSeen[worktreeName] = time.Now()
 		return true
 	}
-	return time.Since(last) > wc.ttl
+	return time.Since(first) < wt.burstWindow
 }
 
-func (wc *worktreeCache) cleanup(worktreeName string) {
-	wc.mu.Lock()
-	delete(wc.dirtyFiles, worktreeName)
-	delete(wc.lastCheck, worktreeName)
-	wc.mu.Unlock()
+func (wt *worktreeTracker) cleanup(worktreeName string) {
+	wt.mu.Lock()
+	delete(wt.firstSeen, worktreeName)
+	wt.mu.Unlock()
 }
 
 func isWorktreePath(relPath string) bool {
@@ -400,15 +351,12 @@ func (b *watcherBase) shouldFilterWorktreeEvent(relPath string, op schema.Operat
 		return canonicalPath, meta, false
 	}
 
-	// CREATE events: filter out checkout burst files using git-status
-	if b.wtCache != nil {
-		if b.wtCache.needsRefresh(worktreeName) {
-			wtAbsPath := filepath.Join(b.cfg.ProjectRoot, worktreePrefix, worktreeName)
-			b.wtCache.refresh(worktreeName, wtAbsPath)
-		}
-		if !b.wtCache.isDirty(worktreeName, canonicalPath) {
-			return "", nil, true
-		}
+	// CREATE events: filter out checkout burst during initial worktree population.
+	// git worktree add produces thousands of CREATE events as it checks out
+	// files. We suppress CREATEs for a burst window after first seeing a
+	// worktree, then let everything through so agent-written files are captured.
+	if b.wtTracker != nil && b.wtTracker.isInBurstWindow(worktreeName) {
+		return "", nil, true
 	}
 
 	return canonicalPath, meta, false

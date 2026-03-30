@@ -575,8 +575,8 @@ func TestProcessFileEvent_FileNotFound(t *testing.T) {
 	base := newTestBase(t, 10*time.Millisecond)
 	getEvents := collectEvents(base)
 
-	// For create/modify, if the file is missing captureContent fails and no
-	// event should be dispatched.
+	// For create/modify, if the file is missing captureContent fails but the
+	// event should still be dispatched with empty content hash.
 	pe := &pendingEvent{
 		path:      "nonexistent.go",
 		op:        schema.OpCreate,
@@ -585,8 +585,11 @@ func TestProcessFileEvent_FileNotFound(t *testing.T) {
 	base.processFileEvent(pe)
 
 	events := getEvents()
-	if len(events) != 0 {
-		t.Errorf("expected 0 events when file is missing, got %d", len(events))
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event even when file is missing, got %d", len(events))
+	}
+	if events[0].ContentHash != "" {
+		t.Errorf("ContentHash should be empty when capture fails, got %q", events[0].ContentHash)
 	}
 }
 
@@ -1713,46 +1716,30 @@ func TestParseWorktreePath(t *testing.T) {
 	}
 }
 
-func TestWorktreeCache(t *testing.T) {
-	wc := newWorktreeCache(50 * time.Millisecond)
+func TestWorktreeTracker(t *testing.T) {
+	wt := newWorktreeTracker(50 * time.Millisecond)
 
-	if !wc.needsRefresh("agent-abc") {
-		t.Error("new cache should need refresh for unknown worktree")
-	}
-
-	wc.mu.Lock()
-	wc.dirtyFiles["agent-abc"] = map[string]bool{
-		"src/App.tsx": true,
-		"src/main.go": true,
-	}
-	wc.lastCheck["agent-abc"] = time.Now()
-	wc.mu.Unlock()
-
-	if wc.needsRefresh("agent-abc") {
-		t.Error("recently refreshed cache should not need refresh")
+	if !wt.isInBurstWindow("agent-abc") {
+		t.Error("first event should be in burst window")
 	}
 
-	if !wc.isDirty("agent-abc", "src/App.tsx") {
-		t.Error("src/App.tsx should be dirty")
-	}
-	if wc.isDirty("agent-abc", "src/other.go") {
-		t.Error("src/other.go should not be dirty")
-	}
-	if wc.isDirty("agent-xyz", "src/App.tsx") {
-		t.Error("unknown worktree should not have dirty files")
+	if !wt.isInBurstWindow("agent-abc") {
+		t.Error("should still be in burst window immediately after first event")
 	}
 
 	time.Sleep(60 * time.Millisecond)
-	if !wc.needsRefresh("agent-abc") {
-		t.Error("cache should need refresh after TTL expires")
+
+	if wt.isInBurstWindow("agent-abc") {
+		t.Error("should not be in burst window after window expires")
 	}
 
-	wc.cleanup("agent-abc")
-	if wc.isDirty("agent-abc", "src/App.tsx") {
-		t.Error("after cleanup, no files should be dirty")
+	if !wt.isInBurstWindow("agent-xyz") {
+		t.Error("first event for new worktree should be in burst window")
 	}
-	if !wc.needsRefresh("agent-abc") {
-		t.Error("after cleanup, cache should need refresh")
+
+	wt.cleanup("agent-abc")
+	if !wt.isInBurstWindow("agent-abc") {
+		t.Error("after cleanup, first event should start a new burst window")
 	}
 }
 
@@ -1803,26 +1790,45 @@ func TestShouldFilterWorktreeEvent_DeleteAlwaysAllowed(t *testing.T) {
 	}
 }
 
-func TestShouldFilterWorktreeEvent_CreateFiltered(t *testing.T) {
+func TestShouldFilterWorktreeEvent_CreateFilteredDuringBurst(t *testing.T) {
 	base := newTestBase(t, 10*time.Millisecond)
-
-	base.wtCache.mu.Lock()
-	base.wtCache.dirtyFiles["agent-abc"] = map[string]bool{
-		"src/App.tsx": true,
-	}
-	base.wtCache.lastCheck["agent-abc"] = time.Now()
-	base.wtCache.mu.Unlock()
+	base.wtTracker = newWorktreeTracker(100 * time.Millisecond)
 
 	_, _, skip := base.shouldFilterWorktreeEvent(
-		".claude/worktrees/agent-abc/src/other.go", schema.OpCreate)
+		".claude/worktrees/agent-abc/src/App.tsx", schema.OpCreate)
 	if !skip {
-		t.Error("CREATE event for clean file should be skipped (checkout burst)")
+		t.Error("CREATE during burst window should be skipped")
 	}
 
+	_, _, skip = base.shouldFilterWorktreeEvent(
+		".claude/worktrees/agent-abc/src/other.go", schema.OpCreate)
+	if !skip {
+		t.Error("second CREATE during burst window should also be skipped")
+	}
+
+	time.Sleep(110 * time.Millisecond)
+
 	filteredPath, meta, skip := base.shouldFilterWorktreeEvent(
-		".claude/worktrees/agent-abc/src/App.tsx", schema.OpCreate)
+		".claude/worktrees/agent-abc/src/new-file.go", schema.OpCreate)
 	if skip {
-		t.Error("CREATE event for dirty file should not be skipped")
+		t.Error("CREATE after burst window should not be skipped")
+	}
+	if filteredPath != "src/new-file.go" {
+		t.Errorf("filteredPath = %q, want %q", filteredPath, "src/new-file.go")
+	}
+	if meta == nil || meta["worktree"] != "agent-abc" {
+		t.Errorf("metadata should contain worktree=agent-abc, got %v", meta)
+	}
+}
+
+func TestShouldFilterWorktreeEvent_ModifyDuringBurstAllowed(t *testing.T) {
+	base := newTestBase(t, 10*time.Millisecond)
+	base.wtTracker = newWorktreeTracker(5 * time.Second)
+
+	filteredPath, meta, skip := base.shouldFilterWorktreeEvent(
+		".claude/worktrees/agent-abc/src/App.tsx", schema.OpModify)
+	if skip {
+		t.Error("MODIFY during burst window should NOT be skipped")
 	}
 	if filteredPath != "src/App.tsx" {
 		t.Errorf("filteredPath = %q, want %q", filteredPath, "src/App.tsx")

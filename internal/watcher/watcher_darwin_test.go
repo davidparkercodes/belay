@@ -95,6 +95,14 @@ func TestMapFSEventOp_CombinedFlags_RemoveWins(t *testing.T) {
 	}
 }
 
+func TestMapFSEventOp_CombinedCreatedAndModified(t *testing.T) {
+	flags := fsevents.ItemCreated | fsevents.ItemModified
+	got := mapFSEventOp(flags, "/tmp/file.go")
+	if got != schema.OpModify {
+		t.Errorf("ItemCreated|ItemModified => %v, want OpModify (prefer modify to avoid worktree filter)", got)
+	}
+}
+
 func TestMapFSEventOp_CombinedFlags_RenameBeforeCreate(t *testing.T) {
 	// ItemRenamed takes priority over ItemCreated.
 	flags := fsevents.ItemRenamed | fsevents.ItemCreated

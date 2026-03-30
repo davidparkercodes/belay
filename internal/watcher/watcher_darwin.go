@@ -173,6 +173,8 @@ func mapFSEventOp(flags fsevents.EventFlags, absPath string) schema.Operation {
 			return schema.OpDelete
 		}
 		return schema.OpModify
+	case flags&fsevents.ItemModified != 0 && flags&fsevents.ItemCreated != 0:
+		return schema.OpModify
 	case flags&fsevents.ItemCreated != 0:
 		return schema.OpCreate
 	case flags&fsevents.ItemModified != 0:
