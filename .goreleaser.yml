@@ -33,25 +33,23 @@ builds:
     ldflags:
       - -s -w -X main.Version={{.Version}}
 archives:
-  - format: tar.gz
+  - formats: ["tar.gz"]
     name_template: "belay_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format_overrides:
       - goos: windows
-        format: zip
+        formats: ["zip"]
 checksum:
   name_template: 'checksums.txt'
-brews:
+homebrew_casks:
   - repository:
       owner: davidparkercodes
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: "https://github.com/davidparkercodes/belay"
     description: "AI-aware local version control for concurrent agent workflows"
-    license: "MIT"
-    install: |
-      bin.install "belay"
-    test: |
-      system "#{bin}/belay", "--version"
+    directory: Casks
+    binaries:
+      - belay
 changelog:
   sort: asc
   filters:
