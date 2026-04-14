@@ -128,7 +128,7 @@ func initBase(wb *watcherBase, cfg *config.Config, objStore *store.Store, matche
 	wb.done = make(chan struct{})
 	wb.logger = log.New(os.Stderr, "[belay-watcher] ", log.LstdFlags)
 	wb.health = &healthState{status: StatusStopped}
-	wb.wtTracker = newWorktreeTracker(10 * time.Second)
+	wb.wtTracker = newWorktreeTracker(10*time.Second, 30*time.Second)
 }
 
 func (b *watcherBase) Health() WatcherHealth {
@@ -282,15 +282,19 @@ func (b *watcherBase) shouldIgnoreRel(relPath string) bool {
 const worktreePrefix = ".claude/worktrees/"
 
 type worktreeTracker struct {
-	mu          sync.RWMutex
-	firstSeen   map[string]time.Time
-	burstWindow time.Duration
+	mu            sync.RWMutex
+	firstSeen     map[string]time.Time
+	cleanedUpAt   map[string]time.Time
+	burstWindow   time.Duration
+	cleanupWindow time.Duration
 }
 
-func newWorktreeTracker(burstWindow time.Duration) *worktreeTracker {
+func newWorktreeTracker(burstWindow, cleanupWindow time.Duration) *worktreeTracker {
 	return &worktreeTracker{
-		firstSeen:   make(map[string]time.Time),
-		burstWindow: burstWindow,
+		firstSeen:     make(map[string]time.Time),
+		cleanedUpAt:   make(map[string]time.Time),
+		burstWindow:   burstWindow,
+		cleanupWindow: cleanupWindow,
 	}
 }
 
@@ -305,9 +309,27 @@ func (wt *worktreeTracker) isInBurstWindow(worktreeName string) bool {
 	return time.Since(first) < wt.burstWindow
 }
 
+func (wt *worktreeTracker) recordCleanup(worktreeName string) {
+	wt.mu.Lock()
+	defer wt.mu.Unlock()
+	wt.cleanedUpAt[worktreeName] = time.Now()
+	delete(wt.firstSeen, worktreeName)
+}
+
+func (wt *worktreeTracker) isRecentlyCleanedUp(worktreeName string) bool {
+	wt.mu.RLock()
+	defer wt.mu.RUnlock()
+	t, ok := wt.cleanedUpAt[worktreeName]
+	if !ok {
+		return false
+	}
+	return time.Since(t) < wt.cleanupWindow
+}
+
 func (wt *worktreeTracker) cleanup(worktreeName string) {
 	wt.mu.Lock()
 	delete(wt.firstSeen, worktreeName)
+	delete(wt.cleanedUpAt, worktreeName)
 	wt.mu.Unlock()
 }
 
@@ -347,7 +369,26 @@ func (b *watcherBase) shouldFilterWorktreeEvent(relPath string, op schema.Operat
 
 	meta := map[string]string{"worktree": worktreeName}
 
-	if op == schema.OpModify || op == schema.OpDelete {
+	if op == schema.OpModify {
+		return canonicalPath, meta, false
+	}
+
+	if op == schema.OpDelete {
+		// Worktree removal (`git worktree remove`) deletes every file in the worktree,
+		// which would otherwise get mapped to the canonical path and recorded as phantom
+		// DELETE events against files that still exist on main. When the worktree root
+		// is already gone — or we recently observed it going away — treat subsequent
+		// DELETEs as cleanup cascade and suppress them.
+		if b.wtTracker != nil && b.wtTracker.isRecentlyCleanedUp(worktreeName) {
+			return "", nil, true
+		}
+		wtRootAbs := filepath.Join(b.cfg.ProjectRoot, worktreePrefix, worktreeName)
+		if _, err := os.Stat(wtRootAbs); os.IsNotExist(err) {
+			if b.wtTracker != nil {
+				b.wtTracker.recordCleanup(worktreeName)
+			}
+			return "", nil, true
+		}
 		return canonicalPath, meta, false
 	}
 

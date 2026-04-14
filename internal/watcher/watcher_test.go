@@ -1717,7 +1717,7 @@ func TestParseWorktreePath(t *testing.T) {
 }
 
 func TestWorktreeTracker(t *testing.T) {
-	wt := newWorktreeTracker(50 * time.Millisecond)
+	wt := newWorktreeTracker(50*time.Millisecond, 50*time.Millisecond)
 
 	if !wt.isInBurstWindow("agent-abc") {
 		t.Error("first event should be in burst window")
@@ -1740,6 +1740,24 @@ func TestWorktreeTracker(t *testing.T) {
 	wt.cleanup("agent-abc")
 	if !wt.isInBurstWindow("agent-abc") {
 		t.Error("after cleanup, first event should start a new burst window")
+	}
+}
+
+func TestWorktreeTracker_CleanupDetection(t *testing.T) {
+	wt := newWorktreeTracker(10*time.Millisecond, 50*time.Millisecond)
+
+	if wt.isRecentlyCleanedUp("agent-abc") {
+		t.Error("unseen worktree should not be marked as recently cleaned up")
+	}
+
+	wt.recordCleanup("agent-abc")
+	if !wt.isRecentlyCleanedUp("agent-abc") {
+		t.Error("worktree should be marked as recently cleaned up after recordCleanup")
+	}
+
+	time.Sleep(60 * time.Millisecond)
+	if wt.isRecentlyCleanedUp("agent-abc") {
+		t.Error("cleanup marker should expire after cleanupWindow")
 	}
 }
 
@@ -1774,13 +1792,18 @@ func TestShouldFilterWorktreeEvent_ModifyAlwaysAllowed(t *testing.T) {
 	}
 }
 
-func TestShouldFilterWorktreeEvent_DeleteAlwaysAllowed(t *testing.T) {
+func TestShouldFilterWorktreeEvent_DeletePassesThroughWhenWorktreeExists(t *testing.T) {
 	base := newTestBase(t, 10*time.Millisecond)
+
+	wtRoot := filepath.Join(base.cfg.ProjectRoot, ".claude", "worktrees", "agent-xyz")
+	if err := os.MkdirAll(wtRoot, 0755); err != nil {
+		t.Fatalf("create worktree dir: %v", err)
+	}
 
 	filteredPath, meta, skip := base.shouldFilterWorktreeEvent(
 		".claude/worktrees/agent-xyz/domains/service/file.go", schema.OpDelete)
 	if skip {
-		t.Error("DELETE events in worktrees should never be skipped")
+		t.Error("DELETE should pass through when worktree root still exists (agent-initiated delete)")
 	}
 	if filteredPath != "domains/service/file.go" {
 		t.Errorf("filteredPath = %q, want %q", filteredPath, "domains/service/file.go")
@@ -1790,9 +1813,39 @@ func TestShouldFilterWorktreeEvent_DeleteAlwaysAllowed(t *testing.T) {
 	}
 }
 
+func TestShouldFilterWorktreeEvent_DeleteSuppressedWhenWorktreeMissing(t *testing.T) {
+	base := newTestBase(t, 10*time.Millisecond)
+
+	_, _, skip := base.shouldFilterWorktreeEvent(
+		".claude/worktrees/agent-gone/domains/service/file.go", schema.OpDelete)
+	if !skip {
+		t.Error("DELETE should be suppressed when worktree root is gone (cleanup cascade)")
+	}
+
+	if !base.wtTracker.isRecentlyCleanedUp("agent-gone") {
+		t.Error("detecting a cleanup cascade should mark the worktree as recently cleaned up")
+	}
+}
+
+func TestShouldFilterWorktreeEvent_DeleteSuppressedByCleanupMarker(t *testing.T) {
+	base := newTestBase(t, 10*time.Millisecond)
+
+	wtRoot := filepath.Join(base.cfg.ProjectRoot, ".claude", "worktrees", "agent-straggler")
+	if err := os.MkdirAll(wtRoot, 0755); err != nil {
+		t.Fatalf("create worktree dir: %v", err)
+	}
+	base.wtTracker.recordCleanup("agent-straggler")
+
+	_, _, skip := base.shouldFilterWorktreeEvent(
+		".claude/worktrees/agent-straggler/src/App.tsx", schema.OpDelete)
+	if !skip {
+		t.Error("straggling DELETE after cleanup detection should be suppressed even if worktree dir briefly re-exists")
+	}
+}
+
 func TestShouldFilterWorktreeEvent_CreateFilteredDuringBurst(t *testing.T) {
 	base := newTestBase(t, 10*time.Millisecond)
-	base.wtTracker = newWorktreeTracker(100 * time.Millisecond)
+	base.wtTracker = newWorktreeTracker(100*time.Millisecond, 30*time.Second)
 
 	_, _, skip := base.shouldFilterWorktreeEvent(
 		".claude/worktrees/agent-abc/src/App.tsx", schema.OpCreate)
@@ -1823,7 +1876,7 @@ func TestShouldFilterWorktreeEvent_CreateFilteredDuringBurst(t *testing.T) {
 
 func TestShouldFilterWorktreeEvent_ModifyDuringBurstAllowed(t *testing.T) {
 	base := newTestBase(t, 10*time.Millisecond)
-	base.wtTracker = newWorktreeTracker(5 * time.Second)
+	base.wtTracker = newWorktreeTracker(5*time.Second, 30*time.Second)
 
 	filteredPath, meta, skip := base.shouldFilterWorktreeEvent(
 		".claude/worktrees/agent-abc/src/App.tsx", schema.OpModify)
