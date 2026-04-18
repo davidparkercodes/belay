@@ -118,6 +118,7 @@ curl -X POST http://localhost:33412/api/record \
 | `belay daemon stop` | Stop the daemon |
 | `belay status` | System and session overview |
 | `belay log` | Browse event history with filters |
+| `belay grep` | Find events that added or removed a string (pickaxe, like `git log -S`) |
 | `belay diff` | View changes between time points or sessions |
 | `belay restore` | Recover files by time, event, or session |
 | `belay sessions` | List and inspect AI sessions |
