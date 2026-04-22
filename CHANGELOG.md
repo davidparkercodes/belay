@@ -2,6 +2,11 @@
 
 All notable changes to Belay are documented here.
 
+## Unreleased
+
+### Fixed
+- **`getProcessCwd` hardened against macOS 26 kernel panic**: macOS 26 (Darwin 25.2.0) has a reproducible kernel bug where `lsof` can trigger a NULL+0x48 data abort during proc/file-table iteration. Belay's single-PID `lsof -p PID -d cwd` call is on a different, lower-risk kernel path than the multi-process enumeration that panicked, but the call is now serialized behind a `sync.Mutex` and bounded by a 2s `context.WithTimeout` to eliminate any residual concurrency exposure.
+
 ## v1.5.0 - 2026-04-13
 
 ### Added

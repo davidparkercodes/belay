@@ -3,13 +3,22 @@
 package session
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
+
+// lsofMu serializes lsof invocations. On macOS 26 (Darwin 25.2.0) concurrent
+// lsof calls have triggered reproducible kernel panics (NULL+0x48 in proc
+// file-table iteration). Single-PID calls hit a different syscall path than
+// the multi-process enumeration that panicked, so they are much lower risk,
+// but serializing + capping duration eliminates any residual race exposure.
+var lsofMu sync.Mutex
 
 // getProcessList returns the output of `ps -eo pid,ppid,command` for process discovery.
 func getProcessList() (string, error) {
@@ -43,8 +52,14 @@ func getProcessCommand(pid int) string {
 }
 
 // getProcessCwd returns the current working directory of a process using lsof.
+// Serialized + time-boxed because lsof on macOS 26 has triggered kernel panics
+// under concurrency; see lsofMu for the full context.
 func getProcessCwd(pid int) string {
-	out, err := exec.Command("lsof", "-p", strconv.Itoa(pid), "-Fn", "-d", "cwd").Output()
+	lsofMu.Lock()
+	defer lsofMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "lsof", "-p", strconv.Itoa(pid), "-Fn", "-d", "cwd").Output()
 	if err != nil {
 		return ""
 	}
