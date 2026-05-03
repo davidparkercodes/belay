@@ -201,115 +201,7 @@ func TestNew_SetsLogger(t *testing.T) {
 	}
 }
 
-// ─── writePID / removePID ───────────────────────────────────────────────────
-
-func TestWritePID_CreatesFile(t *testing.T) {
-	cfg := testConfig(t)
-	d, err := New(cfg, "test")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	if err := d.writePID(); err != nil {
-		t.Fatalf("writePID: %v", err)
-	}
-
-	data, err := os.ReadFile(cfg.PIDPath())
-	if err != nil {
-		t.Fatalf("ReadFile PID: %v", err)
-	}
-
-	pid, err := strconv.Atoi(string(data))
-	if err != nil {
-		t.Fatalf("PID file contains non-integer: %q", string(data))
-	}
-
-	if pid != os.Getpid() {
-		t.Errorf("PID file contains %d, want %d", pid, os.Getpid())
-	}
-}
-
-func TestWritePID_OverwritesExisting(t *testing.T) {
-	cfg := testConfig(t)
-	d, err := New(cfg, "test")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	// Write a stale PID first
-	if err := os.WriteFile(cfg.PIDPath(), []byte("99999"), 0644); err != nil {
-		t.Fatalf("WriteFile stale PID: %v", err)
-	}
-
-	if err := d.writePID(); err != nil {
-		t.Fatalf("writePID: %v", err)
-	}
-
-	data, err := os.ReadFile(cfg.PIDPath())
-	if err != nil {
-		t.Fatalf("ReadFile PID: %v", err)
-	}
-
-	pid, err := strconv.Atoi(string(data))
-	if err != nil {
-		t.Fatalf("PID file contains non-integer: %q", string(data))
-	}
-
-	if pid != os.Getpid() {
-		t.Errorf("PID file should be overwritten to %d, got %d", os.Getpid(), pid)
-	}
-}
-
-func TestRemovePID_DeletesFile(t *testing.T) {
-	cfg := testConfig(t)
-	d, err := New(cfg, "test")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	if err := d.writePID(); err != nil {
-		t.Fatalf("writePID: %v", err)
-	}
-
-	// Verify it exists
-	if _, err := os.Stat(cfg.PIDPath()); err != nil {
-		t.Fatalf("PID file should exist before removal: %v", err)
-	}
-
-	d.removePID()
-
-	if _, err := os.Stat(cfg.PIDPath()); !os.IsNotExist(err) {
-		t.Error("PID file should not exist after removePID")
-	}
-}
-
-func TestRemovePID_NoErrorIfMissing(t *testing.T) {
-	cfg := testConfig(t)
-	d, err := New(cfg, "test")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	// removePID should not panic when the file does not exist
-	d.removePID()
-}
-
-func TestWritePID_FailsIfDirMissing(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := config.DefaultConfig(tmpDir)
-	// Do NOT create .belay dir, so PIDPath's parent doesn't exist
-	cfg.BelayPath = filepath.Join(tmpDir, "nonexistent", ".belay")
-
-	d, err := New(cfg, "test")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	err = d.writePID()
-	if err == nil {
-		t.Error("writePID should fail when .belay directory does not exist")
-	}
-}
+// ─── PID lock lifecycle covered by lock_test.go ─────────────────────────────
 
 // ─── IsRunning ──────────────────────────────────────────────────────────────
 
@@ -378,9 +270,11 @@ func TestIsRunning_DeadProcess(t *testing.T) {
 		t.Errorf("pid should be 0 for dead process, got %d", pid)
 	}
 
-	// IsRunning should clean up the stale PID file
-	if _, err := os.Stat(cfg.PIDPath()); !os.IsNotExist(err) {
-		t.Error("IsRunning should remove stale PID file for dead process")
+	// IsRunning is now read-only and must not delete stale pidfiles.
+	// Stale-cleanup is handled atomically by acquirePIDLock so that we never
+	// race against a live daemon that owns the flock.
+	if _, err := os.Stat(cfg.PIDPath()); err != nil {
+		t.Errorf("IsRunning should not remove the pidfile; stat err: %v", err)
 	}
 }
 
@@ -1095,45 +989,6 @@ func TestHandleEvent_SessionWithNilMetadata(t *testing.T) {
 
 	if !d.sessionHasFile("nil-meta-session", "nil-meta.go") {
 		t.Error("file should be tracked even with nil metadata")
-	}
-}
-
-// ─── Integration-style: writePID + IsRunning + removePID lifecycle ──────────
-
-func TestPIDLifecycle(t *testing.T) {
-	cfg := testConfig(t)
-	d, err := New(cfg, "test")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	// Initially not running
-	running, _ := IsRunning(cfg)
-	if running {
-		t.Error("should not be running before writePID")
-	}
-
-	// Write PID
-	if err := d.writePID(); err != nil {
-		t.Fatalf("writePID: %v", err)
-	}
-
-	// Now should be running (PID matches our process)
-	running, pid := IsRunning(cfg)
-	if !running {
-		t.Error("should be running after writePID")
-	}
-	if pid != os.Getpid() {
-		t.Errorf("pid = %d, want %d", pid, os.Getpid())
-	}
-
-	// Remove PID
-	d.removePID()
-
-	// Should no longer be running
-	running, _ = IsRunning(cfg)
-	if running {
-		t.Error("should not be running after removePID")
 	}
 }
 

@@ -215,6 +215,7 @@ func defaultPatterns() []pattern {
 		".DS_Store",
 		"build/",
 		"dist/",
+		"target/",
 		".next/",
 		".vite/",
 		".turbo/",

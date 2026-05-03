@@ -164,15 +164,16 @@ func TestE2E_DaemonInitAndCleanup(t *testing.T) {
 		t.Fatalf("watcher.Start: %v", err)
 	}
 
-	// Write PID file
-	if err := d.writePID(); err != nil {
-		t.Fatalf("writePID: %v", err)
+	// Acquire the PID lock
+	lock, err := acquirePIDLock(cfg.PIDPath())
+	if err != nil {
+		t.Fatalf("acquirePIDLock: %v", err)
 	}
 
-	// Verify PID file exists
+	// Verify PID file exists and reports the current process
 	running, pid := IsRunning(cfg)
 	if !running {
-		t.Fatal("expected daemon to be running after writePID")
+		t.Fatal("expected daemon to be running after acquiring lock")
 	}
 	if pid != os.Getpid() {
 		t.Errorf("PID mismatch: got %d, want %d", pid, os.Getpid())
@@ -190,12 +191,12 @@ func TestE2E_DaemonInitAndCleanup(t *testing.T) {
 	// Cleanup — call each exactly once (no t.Cleanup to avoid double-close panics)
 	_ = d.watcher.Stop()
 	d.registry.Stop()
-	d.removePID()
+	lock.Release()
 
 	// Verify PID file is gone
 	running, _ = IsRunning(cfg)
 	if running {
-		t.Error("daemon should not be running after removePID")
+		t.Error("daemon should not be running after releasing lock")
 	}
 }
 

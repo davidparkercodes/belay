@@ -3,6 +3,7 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -46,6 +47,7 @@ type Daemon struct {
 	watchdogDone    chan struct{}
 	watchdogRestarts int
 	burst          *burstDetector
+	pidLock        *pidLock
 }
 
 // New creates a new Daemon with the given configuration.
@@ -68,15 +70,17 @@ func (d *Daemon) Run() error {
 		return fmt.Errorf("init: %w", err)
 	}
 
-	if err := d.writePID(); err != nil {
+	lock, err := acquirePIDLock(d.cfg.PIDPath())
+	if err != nil {
 		d.cleanup()
-		return fmt.Errorf("write PID: %w", err)
+		return err
 	}
+	d.pidLock = lock
 
 	d.registry.Start()
 
 	if err := d.watcher.Start(); err != nil {
-		d.removePID()
+		d.pidLock.Release()
 		d.cleanup()
 		return fmt.Errorf("start watcher: %w", err)
 	}
@@ -113,7 +117,7 @@ func (d *Daemon) Run() error {
 	cleanupDone := make(chan struct{})
 	go func() {
 		d.cleanup()
-		d.removePID()
+		d.pidLock.Release()
 		close(cleanupDone)
 	}()
 
@@ -682,16 +686,35 @@ func (d *Daemon) cleanup() {
 	d.logger.Printf("shutdown: cleanup completed in %s", time.Since(start).Round(time.Millisecond))
 }
 
-func (d *Daemon) writePID() error {
-	pid := os.Getpid()
-	return os.WriteFile(d.cfg.PIDPath(), []byte(strconv.Itoa(pid)), 0644)
+// alreadyRunningError is returned when an attempt to start the daemon fails
+// because another daemon already holds the PID lock.
+type alreadyRunningError struct {
+	pid int
 }
 
-func (d *Daemon) removePID() {
-	os.Remove(d.cfg.PIDPath())
+func (e *alreadyRunningError) Error() string {
+	return fmt.Sprintf("another daemon already running (PID %d)", e.pid)
 }
 
-// IsRunning checks whether a daemon is currently running by inspecting the PID file.
+// IsAlreadyRunning reports whether err indicates another daemon holds the PID lock.
+func IsAlreadyRunning(err error) bool {
+	var e *alreadyRunningError
+	return errors.As(err, &e)
+}
+
+// RunningPID returns the PID embedded in an already-running error, or 0.
+func RunningPID(err error) int {
+	var e *alreadyRunningError
+	if errors.As(err, &e) {
+		return e.pid
+	}
+	return 0
+}
+
+// IsRunning reports whether a daemon appears to be running by reading the PID
+// file. It is advisory only -- the authoritative check is the flock acquired
+// by acquirePIDLock. Stale PID files are not removed here; that is handled
+// atomically by the lock-acquisition path.
 func IsRunning(cfg *config.Config) (bool, int) {
 	data, err := os.ReadFile(cfg.PIDPath())
 	if err != nil {
@@ -704,7 +727,6 @@ func IsRunning(cfg *config.Config) (bool, int) {
 	}
 
 	if !isProcessAlive(pid) {
-		os.Remove(cfg.PIDPath())
 		return false, 0
 	}
 

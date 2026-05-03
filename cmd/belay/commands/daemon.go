@@ -87,7 +87,14 @@ func runDaemonStart(cmd *cobra.Command, args []string, version string) error {
 		if err != nil {
 			return fmt.Errorf("create daemon: %w", err)
 		}
-		return d.Run()
+		if err := d.Run(); err != nil {
+			if daemon.IsAlreadyRunning(err) {
+				fmt.Printf("Daemon is already running (PID %d)\n", daemon.RunningPID(err))
+				return nil
+			}
+			return err
+		}
+		return nil
 	}
 
 	pid, err := startDaemonBackground(projectRoot)
