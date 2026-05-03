@@ -47,13 +47,15 @@ go vet ./...
 Each event captures:
 - `event_id`: UUID v7 (time-sortable)
 - `timestamp`: nanosecond precision UTC
-- `file_path`: relative to project root
-- `operation`: create | modify | delete | rename
+- `file_path`: relative to project root (empty string for `checkpoint` markers)
+- `operation`: create | modify | delete | rename | checkpoint
 - `content_hash`: SHA-256 of file content
 - `previous_hash`: SHA-256 of previous content
 - `session_id`: nullable AI session identifier
 - `attribution`: method used (pid, temporal, heuristic, manual, hook)
 - `attribution_confidence`: 0.0--1.0
+
+`checkpoint` events have an empty `file_path` and a `label` in `metadata`. Snapshot reconstruction and `restore --all` skip them; `belay log` renders them with a CHECKPOINT marker. Resolve a checkpoint by event ID or by label (latest match wins) via `restore --to-checkpoint`.
 
 ## Ports (defaults, configurable in .belay/config.toml)
 

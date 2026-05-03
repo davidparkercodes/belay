@@ -123,6 +123,15 @@ func runLog(cmd *cobra.Command, args []string) error {
 
 		opStr := colorOp(e.Op.String())
 
+		if e.Op.String() == "CHECKPOINT" {
+			label := e.Metadata["label"]
+			if label == "" {
+				label = "(unlabeled)"
+			}
+			fmt.Printf("[%s] [%s] %s %s\n", ts, sessionStr, opStr, label)
+			continue
+		}
+
 		sizeStr := ""
 		if e.ContentSize > 0 {
 			sizeStr = fmt.Sprintf(" (%s)", humanBytes(e.ContentSize))
@@ -147,6 +156,14 @@ func parseRelativeTime(s string) (time.Time, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return time.Time{}, fmt.Errorf("empty time string")
+	}
+
+	if strings.HasPrefix(s, "@") {
+		var nanos int64
+		if _, err := fmt.Sscanf(s[1:], "%d", &nanos); err != nil {
+			return time.Time{}, fmt.Errorf("invalid @-timestamp: %s", s)
+		}
+		return time.Unix(0, nanos), nil
 	}
 
 	for _, layout := range []string{
@@ -208,6 +225,8 @@ func colorOp(op string) string {
 		return "\033[31mDELETE\033[0m"
 	case "RENAME":
 		return "\033[36mRENAME\033[0m"
+	case "CHECKPOINT":
+		return "\033[35mCHECKPOINT\033[0m"
 	default:
 		return op
 	}

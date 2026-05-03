@@ -344,6 +344,7 @@ func TestRestoreCmd_Flags(t *testing.T) {
 		{"session", ""},
 		{"event", ""},
 		{"roughly-around", ""},
+		{"to-checkpoint", ""},
 		{"all", "false"},
 		{"dry-run", "false"},
 		{"execute", "false"},
@@ -482,6 +483,70 @@ func TestSnapshotCmd_AtFlagRequired(t *testing.T) {
 	if !strings.Contains(err.Error(), "roughly-around") {
 		t.Errorf("error should mention 'roughly-around', got: %v", err)
 	}
+}
+
+// --- Checkpoint command tests ---
+
+func TestCheckpointCmd_BasicProperties(t *testing.T) {
+	cmd := newCheckpointCmd()
+
+	if cmd.Use != "checkpoint" {
+		t.Errorf("Use = %q, want %q", cmd.Use, "checkpoint")
+	}
+	if cmd.Short == "" {
+		t.Error("Short description should not be empty")
+	}
+	if cmd.Long == "" {
+		t.Error("Long description should not be empty")
+	}
+}
+
+func TestCheckpointCmd_Flags(t *testing.T) {
+	cmd := newCheckpointCmd()
+
+	assertFlags(t, cmd, []cmdTestCase{
+		{"label", ""},
+		{"reason", ""},
+		{"session", ""},
+		{"tool", ""},
+		{"quiet", "false"},
+	})
+}
+
+func TestCheckpointCmd_ShortFlags(t *testing.T) {
+	cmd := newCheckpointCmd()
+
+	for short, want := range map[string]string{"l": "label", "r": "reason", "s": "session"} {
+		f := cmd.Flags().ShorthandLookup(short)
+		if f == nil {
+			t.Fatalf("-%s shorthand should be registered for --%s", short, want)
+		}
+		if f.Name != want {
+			t.Errorf("-%s maps to %q, want %q", short, f.Name, want)
+		}
+	}
+}
+
+func TestCheckpointsCmd_BasicProperties(t *testing.T) {
+	cmd := newCheckpointsCmd()
+
+	if cmd.Use != "checkpoints" {
+		t.Errorf("Use = %q, want %q", cmd.Use, "checkpoints")
+	}
+	if cmd.Short == "" {
+		t.Error("Short description should not be empty")
+	}
+}
+
+func TestCheckpointsCmd_Flags(t *testing.T) {
+	cmd := newCheckpointsCmd()
+
+	assertFlags(t, cmd, []cmdTestCase{
+		{"limit", "50"},
+		{"since", ""},
+		{"until", ""},
+		{"json", "false"},
+	})
 }
 
 // --- Remove command tests ---

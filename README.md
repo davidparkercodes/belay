@@ -98,6 +98,43 @@ Add the hook to your Claude Code settings (`~/.claude/settings.json`):
 
 The hook reads tool use JSON from stdin, extracts the file path and session ID, and calls `belay record` in the background. Non-blocking, will not slow down your AI tool. Without hooks, Belay still captures all changes via filesystem watching and uses process-tree heuristics to attribute sessions.
 
+#### Pre-bash safety net (catches what `/rewind` misses)
+
+Native Claude Code `/rewind` only rolls back edits made through the `Write`, `Edit`, and `NotebookEdit` tools. It does not see destructive bash: `rm -rf`, `git reset --hard`, `git clean`, `dropdb`, build scripts that overwrite files, or one-shot shell commands. Belay's `PreToolUse` Bash hook records a labeled checkpoint before every Bash invocation so you can roll back even those.
+
+Add this hook alongside the PostToolUse one above:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/path/to/belay/hooks/belay-pre-bash.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The hook never blocks Claude Code: it runs the checkpoint in the background with a 2-second watchdog and exits 0 even on failure. If a destructive command takes out a file, roll back with:
+
+```bash
+belay checkpoints                              # find the checkpoint label or id
+belay restore --to-checkpoint <id-or-label> --all --execute
+```
+
+You can also create checkpoints manually outside Claude Code:
+
+```bash
+belay checkpoint --label "before refactor" --reason "about to move 30 files"
+```
+
 ### Any Tool
 
 For AI tools that don't support hooks, or custom integrations, push change events directly via the REST API:
@@ -126,6 +163,8 @@ curl -X POST http://localhost:33412/api/record \
 | `belay conflicts` | Detect overlapping modifications across sessions |
 | `belay commit` | Generate a git commit from a session |
 | `belay snapshot` | Reconstruct project state at any point in time |
+| `belay checkpoint` | Mark a labeled, restorable point in time (pairs with `restore --to-checkpoint`) |
+| `belay checkpoints` | List recorded checkpoints |
 | `belay gc` | Garbage collection and storage compaction |
 
 ## API Endpoints
@@ -143,6 +182,8 @@ All endpoints served on `:33412` when the daemon is running.
 | GET | `/api/files/content` | Get file content by hash |
 | GET | `/api/conflicts` | Detect conflicts |
 | POST | `/api/record` | Push file event from hook |
+| POST | `/api/checkpoint` | Record a labeled checkpoint marker |
+| GET | `/api/checkpoints` | List recorded checkpoints |
 | GET | `/api/stream` | SSE real-time event stream |
 
 ## Configuration

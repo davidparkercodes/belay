@@ -108,6 +108,9 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 
 	files := make(map[string]*fileState)
 	for _, e := range events {
+		if e.Op.String() == "CHECKPOINT" || e.FilePath == "" {
+			continue
+		}
 		fs, exists := files[e.FilePath]
 		if !exists {
 			fs = &fileState{Path: e.FilePath}

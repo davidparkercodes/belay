@@ -26,6 +26,8 @@ const (
 	OpDelete
 	// OpRename indicates a file was renamed.
 	OpRename
+	// OpCheckpoint marks a labeled point in time. Not a file change; FilePath is empty.
+	OpCheckpoint
 )
 
 // String returns the uppercase string representation of the Operation.
@@ -39,6 +41,8 @@ func (o Operation) String() string {
 		return "DELETE"
 	case OpRename:
 		return "RENAME"
+	case OpCheckpoint:
+		return "CHECKPOINT"
 	default:
 		return "UNKNOWN"
 	}
@@ -55,6 +59,8 @@ func ParseOperation(s string) (Operation, error) {
 		return OpDelete, nil
 	case "RENAME", "rename":
 		return OpRename, nil
+	case "CHECKPOINT", "checkpoint":
+		return OpCheckpoint, nil
 	default:
 		return 0, fmt.Errorf("unknown operation: %s", s)
 	}

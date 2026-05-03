@@ -4,6 +4,14 @@ All notable changes to Belay are documented here.
 
 ## Unreleased
 
+### Added
+- **`belay checkpoint`** (pre-bash safety net) -- Mark a labeled, restorable point in time before a risky operation. Pairs with `belay restore --to-checkpoint <id-or-label> --all --execute` to roll back. Native Claude Code `/rewind` only catches Write/Edit/NotebookEdit; this closes the gap for destructive bash (`rm -rf`, `git reset --hard`, `git clean`, `dropdb`, build scripts, one-shot shell commands). Flags: `--label`, `--reason`, `--session`, `--tool`, `--quiet`. CHECKPOINT events go through the daemon's canonical event path so they appear in `belay log` and survive restarts.
+- **`belay checkpoints`** -- List recorded checkpoints with id, time, label, source, and session. Filters: `--since`, `--until`, `--limit`, `--json`.
+- **`belay restore --to-checkpoint <id-or-label>`** -- Resolve a checkpoint by event ID (exact) or label (latest match wins) and restore to that moment. Mutually exclusive with `--roughly-around`; composes with `--all`, `--dry-run`, `--execute`.
+- **`hooks/belay-pre-bash.sh`** -- PreToolUse Bash hook for Claude Code. Always-on, 2-second watchdog, never blocks the shell. Records a checkpoint labeled `pre-bash: <command>` in the cwd's Belay project before each Bash tool invocation. Install via `~/.claude/settings.json` PreToolUse hooks with matcher `Bash`.
+- **`POST /api/checkpoint`** and **`GET /api/checkpoints`** -- Daemon endpoints backing the new CLI. `/api/checkpoint` writes a CHECKPOINT event via the canonical `processEvent` path so the event log, SQLite index, and SSE stream stay consistent.
+- **Schema:** `OpCheckpoint` operation. Backwards-compatible (SchemaVersion stays 1; older readers see `UNKNOWN` and skip). `belay log` renders CHECKPOINT events with their label.
+
 ### Fixed
 - **Multi-daemon spawn from PID-file TOCTOU race**: The "is daemon already running?" pre-check read the PID file but never held a lock on it, so two `belay daemon start` invocations against the same project could both pass the check and start. One observed instance ended with five daemons live on the same `.belay/`, racing on the SQLite index, double-recording every event, and ballooning the object store to ~98 GB before any visible symptom. The PID file is now claimed via `flock(2)` (`syscall.Flock` on Unix, `O_EXCL`-with-stale-cleanup on Windows) and the lock is held for the daemon's lifetime; a losing second daemon returns `IsAlreadyRunning(err)` and exits without writing anything. Stale-PID cleanup moved into lock acquisition (atomic) so it cannot race against a live daemon that owns the flock.
 - **`target/` added to default ignore patterns**: Rust build artifacts are now ignored alongside `node_modules/`, `build/`, `dist/`, etc. Previously `target/` was added only when `belay init` detected a `Cargo.toml` at the project root, which missed Rust crates nested inside polyglot monorepos.

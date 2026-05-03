@@ -107,6 +107,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 
 	mux.HandleFunc("POST /api/record", s.handleRecord)
+	mux.HandleFunc("POST /api/checkpoint", s.handleCheckpoint)
+	mux.HandleFunc("GET /api/checkpoints", s.handleListCheckpoints)
 
 	mux.HandleFunc("GET /api/stream", s.handleStream)
 
@@ -670,6 +672,106 @@ func (s *Server) handleRecord(w http.ResponseWriter, r *http.Request) {
 		"status":   "recorded",
 		"event_id": event.EventID,
 	})
+}
+
+// CheckpointRequest is the JSON payload for the POST /api/checkpoint endpoint.
+type CheckpointRequest struct {
+	Label     string            `json:"label"`
+	Reason    string            `json:"reason,omitempty"`
+	SessionID string            `json:"session_id,omitempty"`
+	ToolName  string            `json:"tool_name,omitempty"`
+	Metadata  map[string]string `json:"metadata,omitempty"`
+}
+
+func (s *Server) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
+	if s.onRecord == nil {
+		writeError(w, http.StatusServiceUnavailable, "record handler not configured")
+		return
+	}
+
+	var req CheckpointRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+
+	if req.Label == "" {
+		req.Label = "checkpoint at " + time.Now().Format("2006-01-02 15:04:05")
+	}
+	if len(req.Label) > 256 {
+		req.Label = req.Label[:256]
+	}
+
+	metadata := map[string]string{
+		"source": "checkpoint",
+		"label":  req.Label,
+	}
+	if req.Reason != "" {
+		metadata["reason"] = req.Reason
+	}
+	if req.ToolName != "" {
+		metadata["tool_name"] = req.ToolName
+	}
+	for k, v := range req.Metadata {
+		if _, exists := metadata[k]; !exists {
+			metadata[k] = v
+		}
+	}
+
+	event := &schema.Event{
+		EventID:               schema.NewEventID(),
+		Version:               schema.SchemaVersion,
+		FilePath:              "",
+		Op:                    schema.OpCheckpoint,
+		SessionID:             req.SessionID,
+		Attribution:           schema.AttrManual,
+		AttributionConfidence: 1.0,
+		Metadata:              metadata,
+	}
+	event.SetTimestamp(time.Now())
+
+	s.onRecord(event)
+
+	writeJSON(w, map[string]interface{}{
+		"status":         "recorded",
+		"event_id":       event.EventID,
+		"label":          req.Label,
+		"timestamp_nano": event.TimestampNano,
+	})
+}
+
+func (s *Server) handleListCheckpoints(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 1000 {
+			limit = n
+		}
+	}
+
+	events, err := s.idx.QueryEvents(&index.Query{
+		Operations: []string{"CHECKPOINT"},
+		OrderDesc:  true,
+		Limit:      limit,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query checkpoints: "+err.Error())
+		return
+	}
+
+	out := make([]map[string]interface{}, 0, len(events))
+	for _, e := range events {
+		out = append(out, map[string]interface{}{
+			"event_id":       e.EventID,
+			"timestamp":      e.Timestamp().Format(time.RFC3339Nano),
+			"timestamp_nano": e.TimestampNano,
+			"label":          e.Metadata["label"],
+			"reason":         e.Metadata["reason"],
+			"tool_name":      e.Metadata["tool_name"],
+			"session_id":     e.SessionID,
+		})
+	}
+
+	writeJSON(w, map[string]interface{}{"checkpoints": out, "count": len(out)})
 }
 
 type GitEventRequest struct {

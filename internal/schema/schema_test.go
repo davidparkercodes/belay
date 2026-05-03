@@ -80,6 +80,7 @@ func TestOperation_String(t *testing.T) {
 		{OpModify, "MODIFY"},
 		{OpDelete, "DELETE"},
 		{OpRename, "RENAME"},
+		{OpCheckpoint, "CHECKPOINT"},
 		{Operation(0), "UNKNOWN"},
 		{Operation(99), "UNKNOWN"},
 	}
@@ -106,6 +107,8 @@ func TestParseOperation(t *testing.T) {
 		{"delete", OpDelete, false},
 		{"RENAME", OpRename, false},
 		{"rename", OpRename, false},
+		{"CHECKPOINT", OpCheckpoint, false},
+		{"checkpoint", OpCheckpoint, false},
 		{"INVALID", 0, true},
 		{"", 0, true},
 	}
@@ -123,7 +126,7 @@ func TestParseOperation(t *testing.T) {
 }
 
 func TestOperation_JSONRoundtrip(t *testing.T) {
-	ops := []Operation{OpCreate, OpModify, OpDelete, OpRename}
+	ops := []Operation{OpCreate, OpModify, OpDelete, OpRename, OpCheckpoint}
 
 	for _, op := range ops {
 		data, err := json.Marshal(op)

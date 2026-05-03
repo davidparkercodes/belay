@@ -292,7 +292,7 @@ func (d *Daemon) handleEvent(event *schema.Event) {
 }
 
 func (d *Daemon) processEvent(event *schema.Event) {
-	if event.PreviousHash == "" && event.Op != schema.OpCreate {
+	if event.PreviousHash == "" && event.Op != schema.OpCreate && event.Op != schema.OpCheckpoint && event.FilePath != "" {
 		if prev, err := d.idx.LatestEvent(event.FilePath); err == nil && prev != nil {
 			event.PreviousHash = prev.ContentHash
 		}

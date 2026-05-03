@@ -31,6 +31,7 @@ Always creates a backup of the current state before restoring.`,
 	cmd.Flags().String("session", "", "Restore to state before this session touched the file(s)")
 	cmd.Flags().String("event", "", "Restore to state after this event (single file only)")
 	cmd.Flags().String("roughly-around", "", "Restore to state at roughly this time (human convenience, AI agents should use --session or --event)")
+	cmd.Flags().String("to-checkpoint", "", "Restore to the moment a checkpoint was recorded (id or label, latest match wins)")
 	cmd.Flags().Bool("all", false, "Restore all tracked files instead of a single file")
 	cmd.Flags().Bool("dry-run", false, "Show what would change without doing it")
 	cmd.Flags().Bool("execute", false, "Actually perform the restore (requires safety.allow_writes in config)")
@@ -42,12 +43,17 @@ func runRestore(cmd *cobra.Command, args []string) error {
 	atTime, _ := cmd.Flags().GetString("roughly-around")
 	eventID, _ := cmd.Flags().GetString("event")
 	sessionID, _ := cmd.Flags().GetString("session")
+	checkpointRef, _ := cmd.Flags().GetString("to-checkpoint")
 	restoreAll, _ := cmd.Flags().GetBool("all")
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	execute, _ := cmd.Flags().GetBool("execute")
 
 	if restoreAll && eventID != "" {
 		return fmt.Errorf("--all cannot be used with --event (event targets a single file)")
+	}
+
+	if checkpointRef != "" && atTime != "" {
+		return fmt.Errorf("--to-checkpoint and --roughly-around are mutually exclusive")
 	}
 
 	if !restoreAll && len(args) == 0 {
@@ -76,11 +82,46 @@ func runRestore(cmd *cobra.Command, args []string) error {
 	}
 	defer objStore.Close()
 
+	if checkpointRef != "" {
+		cpEvent, err := resolveCheckpoint(idx, checkpointRef)
+		if err != nil {
+			return err
+		}
+		atTime = fmt.Sprintf("@%d", cpEvent.TimestampNano)
+		fmt.Printf("Resolved checkpoint %s\n", truncateStr(cpEvent.EventID, 12))
+		if label := cpEvent.Metadata["label"]; label != "" {
+			fmt.Printf("  Label: %s\n", label)
+		}
+		fmt.Printf("  Time:  %s\n\n", cpEvent.Timestamp().Format("2006-01-02 15:04:05"))
+	}
+
 	if restoreAll {
 		return restoreAllFiles(cmd, idx, objStore, cfg, projectRoot, sessionID, atTime, dryRun, execute)
 	}
 
 	return restoreSingleFile(cmd, idx, objStore, cfg, projectRoot, args[0], sessionID, eventID, atTime, dryRun, execute)
+}
+
+func resolveCheckpoint(idx *index.Index, ref string) (*schema.Event, error) {
+	if e, err := idx.GetEvent(ref); err == nil && e != nil && e.Op == schema.OpCheckpoint {
+		return e, nil
+	}
+
+	matches, err := idx.QueryEvents(&index.Query{
+		Operations: []string{"CHECKPOINT"},
+		OrderDesc:  true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("query checkpoints: %w", err)
+	}
+
+	for _, e := range matches {
+		if e.Metadata["label"] == ref {
+			return e, nil
+		}
+	}
+
+	return nil, fmt.Errorf("no checkpoint matches %q (try `belay checkpoints` to list)", ref)
 }
 
 func restoreSingleFile(_ *cobra.Command, idx *index.Index, objStore *store.Store, cfg *config.Config, projectRoot, filePath, sessionID, eventID, atTime string, dryRun, execute bool) error {
@@ -176,6 +217,9 @@ func restoreAllFiles(_ *cobra.Command, idx *index.Index, objStore *store.Store, 
 
 		latestByFile := make(map[string]*schema.Event)
 		for _, e := range allEvents {
+			if e.Op == schema.OpCheckpoint || e.FilePath == "" {
+				continue
+			}
 			latestByFile[e.FilePath] = e
 		}
 
