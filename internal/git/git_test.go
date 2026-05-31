@@ -2044,3 +2044,114 @@ func TestImportHistory_ModifyHasPreviousHash(t *testing.T) {
 		t.Errorf("v1 = %q, want to start with 'version 1'", v1Data)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ProjectSession (plumbing projection onto a ref)
+// ---------------------------------------------------------------------------
+
+func TestProjectSession_PlumbingLeavesHeadAndWorktreeUntouched(t *testing.T) {
+	f := newFixture(t)
+
+	headBefore, err := gitCmd(f.projectDir, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+
+	newHash := f.putContent("hello world")
+	modHash := f.putContent("# test, modified")
+	f.addEvent("s1", "newfile.txt", schema.OpCreate, newHash, "")
+	f.addEvent("s1", "README.md", schema.OpModify, modHash, "")
+
+	res, err := ProjectSession(f.idx, f.objStore, f.projectDir, ProjectOptions{
+		SessionID: "s1",
+		TargetRef: "refs/heads/belay-history",
+		BaseRef:   "HEAD",
+	})
+	if err != nil {
+		t.Fatalf("ProjectSession: %v", err)
+	}
+	if res.Skipped {
+		t.Fatal("expected a projection, got skipped")
+	}
+	if res.FilesAdded != 1 || res.FilesModified != 1 || res.FilesDeleted != 0 {
+		t.Fatalf("counts +%d ~%d -%d, want +1 ~1 -0", res.FilesAdded, res.FilesModified, res.FilesDeleted)
+	}
+
+	headAfter, _ := gitCmd(f.projectDir, "rev-parse", "HEAD")
+	if headAfter != headBefore {
+		t.Fatalf("HEAD moved: %s -> %s", headBefore, headAfter)
+	}
+	if _, err := os.Stat(filepath.Join(f.projectDir, "newfile.txt")); !os.IsNotExist(err) {
+		t.Fatal("plumbing projection must not write the working tree, but newfile.txt exists")
+	}
+
+	ref, _ := gitCmd(f.projectDir, "rev-parse", "refs/heads/belay-history")
+	if ref != res.Hash {
+		t.Fatalf("ref %s != projected commit %s", ref, res.Hash)
+	}
+	parent, _ := gitCmd(f.projectDir, "rev-parse", "refs/heads/belay-history^")
+	if parent != headBefore {
+		t.Fatalf("projection parent %s != base HEAD %s", parent, headBefore)
+	}
+
+	tree, _ := gitCmd(f.projectDir, "ls-tree", "-r", "--name-only", "refs/heads/belay-history")
+	if !strings.Contains(tree, "newfile.txt") || !strings.Contains(tree, "README.md") {
+		t.Fatalf("projected tree should carry the full base plus changes, got: %q", tree)
+	}
+	blob, _ := gitCmd(f.projectDir, "show", res.Hash+":newfile.txt")
+	if blob != "hello world" {
+		t.Fatalf("projected blob = %q, want %q", blob, "hello world")
+	}
+}
+
+func TestProjectSession_SecondProjectionBuildsOnPriorTip(t *testing.T) {
+	f := newFixture(t)
+
+	h1 := f.putContent("one")
+	f.addEvent("s1", "a.txt", schema.OpCreate, h1, "")
+	r1, err := ProjectSession(f.idx, f.objStore, f.projectDir, ProjectOptions{
+		SessionID: "s1", TargetRef: "refs/heads/belay-history", BaseRef: "HEAD",
+	})
+	if err != nil {
+		t.Fatalf("project s1: %v", err)
+	}
+
+	h2 := f.putContent("two")
+	f.addEvent("s2", "b.txt", schema.OpCreate, h2, "")
+	r2, err := ProjectSession(f.idx, f.objStore, f.projectDir, ProjectOptions{
+		SessionID: "s2", TargetRef: "refs/heads/belay-history", BaseRef: "HEAD",
+	})
+	if err != nil {
+		t.Fatalf("project s2: %v", err)
+	}
+
+	parent, _ := gitCmd(f.projectDir, "rev-parse", "refs/heads/belay-history^")
+	if parent != r1.Hash {
+		t.Fatalf("second projection parent %s != first projection %s", parent, r1.Hash)
+	}
+	tree, _ := gitCmd(f.projectDir, "ls-tree", "-r", "--name-only", r2.Hash)
+	if !strings.Contains(tree, "a.txt") || !strings.Contains(tree, "b.txt") {
+		t.Fatalf("accumulated tree should carry both sessions' files, got: %q", tree)
+	}
+}
+
+func TestProjectSession_NoNetChangesSkipped(t *testing.T) {
+	f := newFixture(t)
+
+	h := f.putContent("temp")
+	f.addEvent("s1", "tmp.txt", schema.OpCreate, h, "")
+	f.addEvent("s1", "tmp.txt", schema.OpDelete, "", h)
+
+	res, err := ProjectSession(f.idx, f.objStore, f.projectDir, ProjectOptions{
+		SessionID: "s1", TargetRef: "refs/heads/belay-history", BaseRef: "HEAD",
+	})
+	if err != nil {
+		t.Fatalf("ProjectSession: %v", err)
+	}
+	if !res.Skipped {
+		t.Fatal("expected skip for a session that nets to no change")
+	}
+	if _, err := gitCmd(f.projectDir, "rev-parse", "--verify", "refs/heads/belay-history"); err == nil {
+		t.Fatal("no projection ref should be created when skipped")
+	}
+}

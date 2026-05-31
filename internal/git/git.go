@@ -3,6 +3,7 @@
 package git
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -708,4 +709,228 @@ func extractCommitHash(projectRoot string) string {
 		return ""
 	}
 	return hash
+}
+
+// ProjectOptions configures projecting a session's net changes onto a git ref
+// using plumbing only (no working tree, index, or HEAD mutation).
+type ProjectOptions struct {
+	SessionID  string
+	TargetRef  string
+	BaseRef    string
+	Message    string
+	NoMetadata bool
+	DryRun     bool
+}
+
+// ProjectResult contains the outcome of a session projection.
+type ProjectResult struct {
+	Hash          string
+	Parent        string
+	Base          string
+	Tree          string
+	TargetRef     string
+	FilesAdded    int
+	FilesModified int
+	FilesDeleted  int
+	FilesSkipped  int
+	Message       string
+	Skipped       bool
+}
+
+// ProjectSession projects a session's net file changes onto TargetRef as a single
+// commit built entirely through git plumbing (hash-object, a throwaway index,
+// write-tree, commit-tree, update-ref). It never touches the working tree, the
+// real index, or HEAD, so it is safe to run while other AI sessions edit the same
+// checkout. The new commit's parent is the current ref tip, so the ref always
+// fast-forwards; the update-ref compare-and-swap rejects concurrent projections
+// rather than clobbering them.
+func ProjectSession(idx *index.Index, objStore *store.Store, projectRoot string, opts ProjectOptions) (*ProjectResult, error) {
+	if opts.SessionID == "" {
+		return nil, fmt.Errorf("session ID is required")
+	}
+	if opts.TargetRef == "" {
+		opts.TargetRef = "refs/heads/belay-history"
+	}
+	if !IsGitRepo(projectRoot) {
+		return nil, fmt.Errorf("%s is not a git repository", projectRoot)
+	}
+
+	events, err := idx.QueryEvents(&index.Query{
+		Sessions:  []string{opts.SessionID},
+		OrderDesc: false,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("query session events: %w", err)
+	}
+	if len(events) == 0 {
+		return nil, fmt.Errorf("no events found for session %s", opts.SessionID)
+	}
+
+	changes := computeNetChanges(events)
+
+	// Skip paths inside git submodules: in the superproject tree those are gitlinks,
+	// not files, so they cannot be projected here (they belong to the submodule's repo).
+	skipped := 0
+	if subs := submodulePaths(projectRoot); len(subs) > 0 {
+		var kept []fileChange
+		for _, c := range changes {
+			if pathUnderAny(c.filePath, subs) {
+				skipped++
+				continue
+			}
+			kept = append(kept, c)
+		}
+		changes = kept
+	}
+
+	if len(changes) == 0 {
+		return &ProjectResult{TargetRef: opts.TargetRef, Skipped: true, FilesSkipped: skipped}, nil
+	}
+
+	result := &ProjectResult{TargetRef: opts.TargetRef, FilesSkipped: skipped}
+	for _, c := range changes {
+		switch c.op {
+		case schema.OpCreate:
+			result.FilesAdded++
+		case schema.OpModify:
+			result.FilesModified++
+		case schema.OpDelete:
+			result.FilesDeleted++
+		}
+	}
+
+	result.Message = opts.Message
+	if result.Message == "" {
+		result.Message = buildCommitMessage(opts.SessionID, &CommitResult{
+			FilesAdded:    result.FilesAdded,
+			FilesModified: result.FilesModified,
+			FilesDeleted:  result.FilesDeleted,
+		})
+	}
+	if !opts.NoMetadata {
+		result.Message = appendBelayTrailers(result.Message, opts.SessionID, events)
+	}
+
+	parent, _ := gitCmd(projectRoot, "rev-parse", "--verify", "--quiet", opts.TargetRef+"^{commit}")
+	result.Parent = parent
+
+	// Build on the prior projection tip if the target ref exists; otherwise bootstrap
+	// from BaseRef (the real repo state) so the projection carries a full, coherent
+	// tree rather than just this session's delta.
+	baseCommit := parent
+	if baseCommit == "" && opts.BaseRef != "" {
+		baseCommit, _ = gitCmd(projectRoot, "rev-parse", "--verify", "--quiet", opts.BaseRef+"^{commit}")
+	}
+	result.Base = baseCommit
+
+	if opts.DryRun {
+		return result, nil
+	}
+
+	tmpDir, err := os.MkdirTemp("", "belay-project-")
+	if err != nil {
+		return nil, fmt.Errorf("create temp index dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+	env := append(os.Environ(), "GIT_INDEX_FILE="+filepath.Join(tmpDir, "index"))
+
+	if baseCommit != "" {
+		if _, err := gitCmdEnv(projectRoot, env, "read-tree", baseCommit+"^{tree}"); err != nil {
+			return nil, fmt.Errorf("read-tree base %s: %w", baseCommit, err)
+		}
+	}
+
+	for _, c := range changes {
+		switch c.op {
+		case schema.OpCreate, schema.OpModify:
+			data, err := objStore.Get(c.contentHash)
+			if err != nil {
+				return nil, fmt.Errorf("get object %s for %s: %w", c.contentHash, c.filePath, err)
+			}
+			blob, err := gitHashObject(projectRoot, env, data)
+			if err != nil {
+				return nil, fmt.Errorf("hash-object %s: %w", c.filePath, err)
+			}
+			if _, err := gitCmdEnv(projectRoot, env, "update-index", "--add", "--cacheinfo", "100644", blob, c.filePath); err != nil {
+				return nil, fmt.Errorf("update-index add %s: %w", c.filePath, err)
+			}
+		case schema.OpDelete:
+			_, _ = gitCmdEnv(projectRoot, env, "update-index", "--force-remove", c.filePath)
+		}
+	}
+
+	tree, err := gitCmdEnv(projectRoot, env, "write-tree")
+	if err != nil {
+		return nil, fmt.Errorf("write-tree: %w", err)
+	}
+	result.Tree = tree
+
+	commitArgs := []string{"commit-tree", tree, "-m", result.Message}
+	if baseCommit != "" {
+		commitArgs = append(commitArgs, "-p", baseCommit)
+	}
+	commit, err := gitCmd(projectRoot, commitArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("commit-tree: %w", err)
+	}
+	result.Hash = commit
+
+	if _, err := gitCmd(projectRoot, "update-ref", opts.TargetRef, commit, parent); err != nil {
+		return nil, fmt.Errorf("update-ref %s (concurrent projection?): %w", opts.TargetRef, err)
+	}
+
+	return result, nil
+}
+
+// PushRef pushes a single refspec to a remote using the repo's configured credentials,
+// bounding a stalled transfer with git's own low-speed abort (no external timeout).
+func PushRef(projectRoot, remote, refspec string) (string, error) {
+	return gitCmd(projectRoot, "-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30", "push", remote, refspec)
+}
+
+func submodulePaths(projectRoot string) []string {
+	out, err := gitCmd(projectRoot, "config", "--file", filepath.Join(projectRoot, ".gitmodules"), "--get-regexp", `^submodule\..*\.path$`)
+	if err != nil || out == "" {
+		return nil
+	}
+	var paths []string
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 {
+			paths = append(paths, fields[1])
+		}
+	}
+	return paths
+}
+
+func pathUnderAny(path string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if path == p || strings.HasPrefix(path, p+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func gitCmdEnv(dir string, env []string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %s: %w", strings.Join(args, " "), string(out), err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func gitHashObject(dir string, env []string, data []byte) (string, error) {
+	cmd := exec.Command("git", "hash-object", "-w", "--stdin")
+	cmd.Dir = dir
+	cmd.Env = env
+	cmd.Stdin = bytes.NewReader(data)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("hash-object: %s: %w", string(out), err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }

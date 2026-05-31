@@ -162,6 +162,7 @@ curl -X POST http://localhost:33412/api/record \
 | `belay replay` | Replay a session's changes as diffs or patches |
 | `belay conflicts` | Detect overlapping modifications across sessions |
 | `belay commit` | Generate a git commit from a session |
+| `belay project` | Project a session onto a git ref via plumbing (no working-tree mutation; concurrency-safe) |
 | `belay snapshot` | Reconstruct project state at any point in time |
 | `belay checkpoint` | Mark a labeled, restorable point in time (pairs with `restore --to-checkpoint`) |
 | `belay checkpoints` | List recorded checkpoints |
