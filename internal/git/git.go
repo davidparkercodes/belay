@@ -882,6 +882,138 @@ func ProjectSession(idx *index.Index, objStore *store.Store, projectRoot string,
 	return result, nil
 }
 
+// ProjectWorkingTreeOptions configures a session-independent reconcile projection.
+type ProjectWorkingTreeOptions struct {
+	TargetRef string
+	BaseRef   string
+	Message   string
+	DryRun    bool
+}
+
+// ProjectWorkingTree projects a faithful snapshot of the current working tree onto
+// TargetRef as a single commit, built entirely through git plumbing (a throwaway
+// index seeded from HEAD, git add -A, write-tree, commit-tree, update-ref). It never
+// touches the real working tree, index, or HEAD.
+//
+// Unlike ProjectSession it needs no session ID and no Belay attribution: it captures
+// whatever is on disk right now (tracked changes, untracked non-ignored files, and
+// deletions), so it is the reconcile safety net for changes that no per-session
+// projection can see -- edits made from another repo's session, or changes that
+// arrived with empty/absent Belay attribution. Submodule paths are left exactly as
+// HEAD has them, and .gitignore is honored via git add. If the snapshot already
+// matches the projection tip, it is a no-op.
+func ProjectWorkingTree(projectRoot string, opts ProjectWorkingTreeOptions) (*ProjectResult, error) {
+	if opts.TargetRef == "" {
+		opts.TargetRef = "refs/heads/belay-history"
+	}
+	if !IsGitRepo(projectRoot) {
+		return nil, fmt.Errorf("%s is not a git repository", projectRoot)
+	}
+
+	parent, _ := gitCmd(projectRoot, "rev-parse", "--verify", "--quiet", opts.TargetRef+"^{commit}")
+
+	baseRef := opts.BaseRef
+	if baseRef == "" {
+		baseRef = "HEAD"
+	}
+	seedCommit, _ := gitCmd(projectRoot, "rev-parse", "--verify", "--quiet", baseRef+"^{commit}")
+
+	tmpDir, err := os.MkdirTemp("", "belay-reconcile-")
+	if err != nil {
+		return nil, fmt.Errorf("create temp index dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+	env := append(os.Environ(), "GIT_INDEX_FILE="+filepath.Join(tmpDir, "index"))
+
+	if seedCommit != "" {
+		if _, err := gitCmdEnv(projectRoot, env, "read-tree", seedCommit+"^{tree}"); err != nil {
+			return nil, fmt.Errorf("read-tree %s: %w", baseRef, err)
+		}
+	}
+
+	addArgs := []string{"add", "-A", "--", "."}
+	for _, p := range submodulePaths(projectRoot) {
+		addArgs = append(addArgs, ":(exclude)"+p)
+	}
+	if _, err := gitCmdEnv(projectRoot, env, addArgs...); err != nil {
+		return nil, fmt.Errorf("stage working tree: %w", err)
+	}
+
+	tree, err := gitCmdEnv(projectRoot, env, "write-tree")
+	if err != nil {
+		return nil, fmt.Errorf("write-tree: %w", err)
+	}
+
+	if parent != "" {
+		if parentTree, _ := gitCmd(projectRoot, "rev-parse", "--verify", "--quiet", parent+"^{tree}"); parentTree == tree {
+			return &ProjectResult{TargetRef: opts.TargetRef, Skipped: true}, nil
+		}
+	}
+
+	result := &ProjectResult{TargetRef: opts.TargetRef, Tree: tree, Parent: parent, Base: seedCommit}
+
+	diffBase := parent
+	if diffBase == "" {
+		diffBase = seedCommit
+	}
+	if diffBase != "" {
+		if out, _ := gitCmd(projectRoot, "diff-tree", "-r", "--name-status", diffBase+"^{tree}", tree); out != "" {
+			for _, line := range strings.Split(out, "\n") {
+				if line == "" {
+					continue
+				}
+				switch line[0] {
+				case 'A':
+					result.FilesAdded++
+				case 'M':
+					result.FilesModified++
+				case 'D':
+					result.FilesDeleted++
+				}
+			}
+		}
+	}
+
+	result.Message = opts.Message
+	if result.Message == "" {
+		var parts []string
+		if result.FilesAdded > 0 {
+			parts = append(parts, fmt.Sprintf("%d added", result.FilesAdded))
+		}
+		if result.FilesModified > 0 {
+			parts = append(parts, fmt.Sprintf("%d modified", result.FilesModified))
+		}
+		if result.FilesDeleted > 0 {
+			parts = append(parts, fmt.Sprintf("%d deleted", result.FilesDeleted))
+		}
+		if len(parts) == 0 {
+			parts = append(parts, "snapshot")
+		}
+		result.Message = fmt.Sprintf("belay: reconcile working tree (%s)", strings.Join(parts, ", "))
+	}
+
+	if opts.DryRun {
+		return result, nil
+	}
+
+	commitArgs := []string{"commit-tree", tree, "-m", result.Message}
+	if parent != "" {
+		commitArgs = append(commitArgs, "-p", parent)
+	} else if seedCommit != "" {
+		commitArgs = append(commitArgs, "-p", seedCommit)
+	}
+	commit, err := gitCmd(projectRoot, commitArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("commit-tree: %w", err)
+	}
+	result.Hash = commit
+
+	if _, err := gitCmd(projectRoot, "update-ref", opts.TargetRef, commit, parent); err != nil {
+		return nil, fmt.Errorf("update-ref %s (concurrent projection?): %w", opts.TargetRef, err)
+	}
+	return result, nil
+}
+
 // PushRef pushes a single refspec to a remote using the repo's configured credentials,
 // bounding a stalled transfer with git's own low-speed abort (no external timeout).
 func PushRef(projectRoot, remote, refspec string) (string, error) {
