@@ -24,7 +24,7 @@ type CompactionStrategy int
 const (
 	// StrategyFull retains every event with no compaction.
 	StrategyFull CompactionStrategy = iota
-	// StrategyHourly collapses rapid edits to hourly granularity.
+	// StrategyHourly collapses modify events to one per file+session per hour.
 	StrategyHourly
 	// StrategySessionBoundary keeps only session boundary events.
 	StrategySessionBoundary
@@ -61,11 +61,16 @@ func (p *RetentionPolicy) TierForAge(age time.Duration) *RetentionTier {
 
 // CompactionResult summarizes the outcome of a compaction pass.
 type CompactionResult struct {
-	EventsReviewed int            `json:"events_reviewed"`
-	EventsKept     int            `json:"events_kept"`
-	EventsRemoved  int            `json:"events_removed"`
-	BytesFreed     int64          `json:"bytes_freed"`
-	TierBreakdown  map[string]int `json:"tier_breakdown"`
+	EventsReviewed   int                            `json:"events_reviewed"`
+	EventsKept       int                            `json:"events_kept"`
+	EventsRemoved    int                            `json:"events_removed"`
+	BytesFreed       int64                          `json:"bytes_freed"`
+	ObjectsFreed     int                            `json:"objects_freed"`
+	ObjectBytesFreed int64                          `json:"object_bytes_freed"`
+	TierBreakdown    map[string]int                 `json:"tier_breakdown"`
+	Segments         *index.SegmentCompactionResult `json:"segments,omitempty"`
+	IndexVacuumed    bool                           `json:"index_vacuumed"`
+	DurationMs       int64                          `json:"duration_ms"`
 }
 
 // GCResult summarizes the outcome of a garbage collection pass.
@@ -109,10 +114,6 @@ func GarbageCollect(idx *index.Index, objStore *Store, dryRun bool) (*GCResult, 
 	return result, nil
 }
 
-// rapidEditWindow is the maximum time between consecutive modify events on the same
-// file+session to be considered a "rapid edit" burst eligible for warm-tier collapsing.
-const rapidEditWindow = 60 * time.Second
-
 // Compactor applies tiered retention compaction to the Belay event store.
 type Compactor struct {
 	idx       *index.Index
@@ -120,6 +121,8 @@ type Compactor struct {
 	retention *config.RetentionConfig
 	dryRun    bool
 	now       time.Time
+	eventsDir string
+	logf      func(format string, args ...interface{})
 }
 
 // NewCompactor creates a Compactor with the given dependencies.
@@ -130,17 +133,31 @@ func NewCompactor(idx *index.Index, objStore *Store, retention *config.Retention
 		retention: retention,
 		dryRun:    dryRun,
 		now:       time.Now(),
+		logf:      log.Printf,
+	}
+}
+
+// SetEventsDir enables the segment-reclamation phase (subject to retention.compact_segments).
+func (c *Compactor) SetEventsDir(dir string) {
+	c.eventsDir = dir
+}
+
+// SetLogger routes compaction log lines to the given printf-style function.
+func (c *Compactor) SetLogger(logf func(format string, args ...interface{})) {
+	if logf != nil {
+		c.logf = logf
 	}
 }
 
 // RunCompaction applies all compaction tiers in order: purge, archive, cold, warm,
-// then enforces the storage limit. Returns a summary of all changes.
+// per-file version cap, garbage collection, storage limit, then (optionally) sealed-segment
+// reclamation and an index vacuum. Returns a summary of all changes.
 func (c *Compactor) RunCompaction() (*CompactionResult, error) {
+	start := time.Now()
 	result := &CompactionResult{
 		TierBreakdown: make(map[string]int),
 	}
 
-	// Phase 1: Purge events older than archive tier
 	purged, err := c.purge()
 	if err != nil {
 		return nil, fmt.Errorf("purge: %w", err)
@@ -148,7 +165,6 @@ func (c *Compactor) RunCompaction() (*CompactionResult, error) {
 	result.EventsRemoved += purged
 	result.TierBreakdown["purged"] = purged
 
-	// Phase 2: Archive tier compaction (daily snapshots)
 	archiveRemoved, err := c.compactArchive()
 	if err != nil {
 		return nil, fmt.Errorf("archive compaction: %w", err)
@@ -156,7 +172,6 @@ func (c *Compactor) RunCompaction() (*CompactionResult, error) {
 	result.EventsRemoved += archiveRemoved
 	result.TierBreakdown["archive_compacted"] = archiveRemoved
 
-	// Phase 3: Cold tier compaction (session boundaries only)
 	coldRemoved, err := c.compactCold()
 	if err != nil {
 		return nil, fmt.Errorf("cold compaction: %w", err)
@@ -164,7 +179,6 @@ func (c *Compactor) RunCompaction() (*CompactionResult, error) {
 	result.EventsRemoved += coldRemoved
 	result.TierBreakdown["cold_compacted"] = coldRemoved
 
-	// Phase 4: Warm tier compaction (collapse rapid edits)
 	warmRemoved, err := c.compactWarm()
 	if err != nil {
 		return nil, fmt.Errorf("warm compaction: %w", err)
@@ -172,39 +186,86 @@ func (c *Compactor) RunCompaction() (*CompactionResult, error) {
 	result.EventsRemoved += warmRemoved
 	result.TierBreakdown["warm_compacted"] = warmRemoved
 
-	// Phase 5: Garbage collect orphaned objects
+	versionsRemoved, err := c.enforceMaxVersions()
+	if err != nil {
+		return nil, fmt.Errorf("version cap: %w", err)
+	}
+	result.EventsRemoved += versionsRemoved
+	result.TierBreakdown["version_capped"] = versionsRemoved
+
 	gcResult, err := GarbageCollect(c.idx, c.objStore, c.dryRun)
 	if err != nil {
 		return nil, fmt.Errorf("garbage collect: %w", err)
 	}
+	result.ObjectsFreed += gcResult.OrphanedObjects
+	result.ObjectBytesFreed += gcResult.BytesFreed
 	result.BytesFreed += gcResult.BytesFreed
 
-	// Phase 6: Enforce storage limit
-	storageRemoved, storageFreed, err := c.enforceStorageLimit()
+	storageRemoved, storageObjects, storageFreed, err := c.enforceStorageLimit()
 	if err != nil {
 		return nil, fmt.Errorf("storage limit: %w", err)
 	}
 	result.EventsRemoved += storageRemoved
+	result.ObjectsFreed += storageObjects
+	result.ObjectBytesFreed += storageFreed
 	result.BytesFreed += storageFreed
 	if storageRemoved > 0 {
 		result.TierBreakdown["storage_limit"] = storageRemoved
 	}
 
-	// Count remaining events
+	if c.eventsDir != "" && c.retention.CompactSegments {
+		segResult, err := index.CompactSegments(c.idx, c.eventsDir, c.dryRun, c.logf)
+		if err != nil {
+			return nil, fmt.Errorf("segment compaction: %w", err)
+		}
+		result.Segments = segResult
+		result.BytesFreed += segResult.BytesFreed
+	}
+
+	if !c.dryRun && result.EventsRemoved > 0 {
+		vacuumed, err := c.idx.MaybeVacuum()
+		if err != nil {
+			c.logf("belay: index vacuum skipped: %v", err)
+		}
+		result.IndexVacuumed = vacuumed
+	}
+
 	totalEvents, err := c.idx.CountEvents()
 	if err != nil {
 		return nil, fmt.Errorf("count events: %w", err)
 	}
 	result.EventsKept = int(totalEvents)
 	result.EventsReviewed = result.EventsKept + result.EventsRemoved
+	result.DurationMs = time.Since(start).Milliseconds()
 
 	return result, nil
+}
+
+// compactable reports whether an event may be removed by a tier compaction pass.
+// Checkpoints and session meta-events are never collapsed; only purge removes them.
+func compactable(e *schema.Event) bool {
+	return e.Op != schema.OpCheckpoint && e.FilePath != "" && e.FilePath != ".belay/sessions"
+}
+
+func (c *Compactor) deleteBatch(toDelete []string, tier, verb string) (int, error) {
+	if len(toDelete) == 0 {
+		return 0, nil
+	}
+	if c.dryRun {
+		c.logf("belay: [dry-run] would compact %d %s-tier events (%s)", len(toDelete), tier, verb)
+		return len(toDelete), nil
+	}
+	deleted, err := c.idx.DeleteEventsBatch(toDelete)
+	if err != nil {
+		return 0, err
+	}
+	c.logf("belay: compacted %d %s-tier events (%s)", deleted, tier, verb)
+	return int(deleted), nil
 }
 
 // purge deletes all events older than the archive tier (if archive_days > 0).
 func (c *Compactor) purge() (int, error) {
 	if c.retention.ArchiveDays <= 0 {
-		log.Printf("belay: purge skipped (archive_days=0, retain forever)")
 		return 0, nil
 	}
 
@@ -221,7 +282,7 @@ func (c *Compactor) purge() (int, error) {
 		}
 		count := len(events)
 		if count > 0 {
-			log.Printf("belay: [dry-run] would purge %d events older than %d days", count, c.retention.ArchiveDays)
+			c.logf("belay: [dry-run] would purge %d events older than %d days", count, c.retention.ArchiveDays)
 		}
 		return count, nil
 	}
@@ -232,7 +293,7 @@ func (c *Compactor) purge() (int, error) {
 	}
 
 	if deleted > 0 {
-		log.Printf("belay: purged %d events older than %d days", deleted, c.retention.ArchiveDays)
+		c.logf("belay: purged %d events older than %d days", deleted, c.retention.ArchiveDays)
 	}
 	return int(deleted), nil
 }
@@ -252,58 +313,26 @@ func (c *Compactor) compactArchive() (int, error) {
 		return 0, fmt.Errorf("query archive events: %w", err)
 	}
 
-	if len(events) == 0 {
-		return 0, nil
-	}
-
-	// Group by file path
-	byFile := groupByFile(events)
-
 	var toDelete []string
-	for _, fileEvents := range byFile {
-		// Sort by timestamp ascending
+	for _, fileEvents := range groupByFile(events) {
 		sort.Slice(fileEvents, func(i, j int) bool {
 			return fileEvents[i].TimestampNano < fileEvents[j].TimestampNano
 		})
 
-		// Keep one event per file per day (the last event of each day)
-		dayKey := func(e *schema.Event) string {
-			return e.Timestamp().Format("2006-01-02")
-		}
-
 		byDay := make(map[string][]*schema.Event)
 		for _, e := range fileEvents {
-			key := dayKey(e)
+			key := e.Timestamp().Format("2006-01-02")
 			byDay[key] = append(byDay[key], e)
 		}
 
 		for _, dayEvents := range byDay {
-			if len(dayEvents) <= 1 {
-				continue
-			}
-			// Keep the last event of the day, remove the rest
 			for _, e := range dayEvents[:len(dayEvents)-1] {
 				toDelete = append(toDelete, e.EventID)
 			}
 		}
 	}
 
-	if len(toDelete) == 0 {
-		return 0, nil
-	}
-
-	if c.dryRun {
-		log.Printf("belay: [dry-run] would compact %d archive-tier events (daily snapshots)", len(toDelete))
-		return len(toDelete), nil
-	}
-
-	deleted, err := c.idx.DeleteEventsBatch(toDelete)
-	if err != nil {
-		return 0, err
-	}
-
-	log.Printf("belay: compacted %d archive-tier events to daily snapshots", deleted)
-	return int(deleted), nil
+	return c.deleteBatch(toDelete, "archive", "daily snapshots")
 }
 
 // compactCold keeps only the first and last event per file per session for events
@@ -321,58 +350,21 @@ func (c *Compactor) compactCold() (int, error) {
 		return 0, fmt.Errorf("query cold events: %w", err)
 	}
 
-	if len(events) == 0 {
-		return 0, nil
-	}
-
-	// Group by file+session
-	type fileSessionKey struct {
-		filePath  string
-		sessionID string
-	}
-	byFileSession := make(map[fileSessionKey][]*schema.Event)
-	for _, e := range events {
-		key := fileSessionKey{filePath: e.FilePath, sessionID: e.SessionID}
-		byFileSession[key] = append(byFileSession[key], e)
-	}
-
 	var toDelete []string
-	for _, fsEvents := range byFileSession {
+	for _, fsEvents := range groupByFileSession(events) {
 		if len(fsEvents) <= 2 {
 			continue
 		}
-
-		// Sort by timestamp ascending
-		sort.Slice(fsEvents, func(i, j int) bool {
-			return fsEvents[i].TimestampNano < fsEvents[j].TimestampNano
-		})
-
-		// Keep first and last, remove everything in between
 		for _, e := range fsEvents[1 : len(fsEvents)-1] {
 			toDelete = append(toDelete, e.EventID)
 		}
 	}
 
-	if len(toDelete) == 0 {
-		return 0, nil
-	}
-
-	if c.dryRun {
-		log.Printf("belay: [dry-run] would compact %d cold-tier events (session boundaries)", len(toDelete))
-		return len(toDelete), nil
-	}
-
-	deleted, err := c.idx.DeleteEventsBatch(toDelete)
-	if err != nil {
-		return 0, err
-	}
-
-	log.Printf("belay: compacted %d cold-tier events to session boundaries", deleted)
-	return int(deleted), nil
+	return c.deleteBatch(toDelete, "cold", "session boundaries")
 }
 
-// compactWarm collapses rapid consecutive modify events on the same file+session
-// within a short window, keeping only the first previous_hash and last content_hash.
+// compactWarm collapses modify events to hourly granularity per file+session: within each
+// clock hour only the last modify survives. Creates, deletes and renames are never removed.
 // Events in the warm tier: older than hot_hours but within warm_days.
 func (c *Compactor) compactWarm() (int, error) {
 	warmCutoff := c.now.Add(-time.Duration(c.retention.WarmDays) * 24 * time.Hour)
@@ -387,127 +379,94 @@ func (c *Compactor) compactWarm() (int, error) {
 		return 0, fmt.Errorf("query warm events: %w", err)
 	}
 
-	if len(events) == 0 {
-		return 0, nil
-	}
-
-	// Group by file+session
-	type fileSessionKey struct {
-		filePath  string
-		sessionID string
-	}
-	byFileSession := make(map[fileSessionKey][]*schema.Event)
-	for _, e := range events {
-		key := fileSessionKey{filePath: e.FilePath, sessionID: e.SessionID}
-		byFileSession[key] = append(byFileSession[key], e)
-	}
-
 	var toDelete []string
-	for _, fsEvents := range byFileSession {
-		if len(fsEvents) < 2 {
-			continue
-		}
-
-		// Sort by timestamp ascending
-		sort.Slice(fsEvents, func(i, j int) bool {
-			return fsEvents[i].TimestampNano < fsEvents[j].TimestampNano
-		})
-
-		// Identify bursts of rapid modify events
-		toDelete = append(toDelete, findRapidEditBursts(fsEvents)...)
+	for _, fsEvents := range groupByFileSession(events) {
+		toDelete = append(toDelete, hourlyCollapse(fsEvents)...)
 	}
 
-	if len(toDelete) == 0 {
-		return 0, nil
-	}
-
-	if c.dryRun {
-		log.Printf("belay: [dry-run] would compact %d warm-tier events (rapid edits)", len(toDelete))
-		return len(toDelete), nil
-	}
-
-	deleted, err := c.idx.DeleteEventsBatch(toDelete)
-	if err != nil {
-		return 0, err
-	}
-
-	log.Printf("belay: compacted %d warm-tier events (rapid edits collapsed)", deleted)
-	return int(deleted), nil
+	return c.deleteBatch(toDelete, "warm", "hourly granularity")
 }
 
-// findRapidEditBursts identifies consecutive modify events within the rapid edit window
-// and returns the event IDs of intermediate events to delete. The first and last event
-// of each burst are retained, preserving the first previous_hash and last content_hash.
-func findRapidEditBursts(events []*schema.Event) []string {
+// hourlyCollapse returns the IDs of modify events that are not the last modify within their
+// clock hour. Input must be sorted ascending by timestamp.
+func hourlyCollapse(events []*schema.Event) []string {
 	if len(events) < 2 {
 		return nil
 	}
 
 	var toDelete []string
-
-	// Walk through events finding bursts of rapid modifies
-	burstStart := 0
-	for i := 1; i <= len(events); i++ {
-		// Check if this event continues the current burst
-		inBurst := false
-		if i < len(events) {
-			prev := events[i-1]
-			curr := events[i]
-			// Both must be modify operations and within the rapid edit window
-			if prev.Op == schema.OpModify && curr.Op == schema.OpModify {
-				gap := curr.Timestamp().Sub(prev.Timestamp())
-				if gap <= rapidEditWindow {
-					inBurst = true
-				}
-			}
+	lastModifyInHour := make(map[int64]*schema.Event)
+	for _, e := range events {
+		if e.Op != schema.OpModify {
+			continue
 		}
+		hour := e.TimestampNano / int64(time.Hour)
+		if prev, ok := lastModifyInHour[hour]; ok {
+			toDelete = append(toDelete, prev.EventID)
+		}
+		lastModifyInHour[hour] = e
+	}
+	return toDelete
+}
 
-		if !inBurst {
-			// End of burst (or end of events). If burst has > 1 event, mark intermediates.
-			burstEnd := i - 1
-			if burstEnd > burstStart {
-				// Keep burstStart and burstEnd, delete everything in between
-				for j := burstStart + 1; j < burstEnd; j++ {
-					if events[j].Op == schema.OpModify {
-						toDelete = append(toDelete, events[j].EventID)
-					}
-				}
-			}
-			burstStart = i
+// enforceMaxVersions keeps only the newest max_versions_per_file modify events per file
+// beyond the hot tier. Everything inside the hot window and every non-modify event is kept.
+func (c *Compactor) enforceMaxVersions() (int, error) {
+	limit := c.retention.MaxVersionsPerFile
+	if limit <= 0 {
+		return 0, nil
+	}
+
+	hotCutoff := c.now.Add(-time.Duration(c.retention.HotHours) * time.Hour)
+	events, err := c.idx.QueryEvents(&index.Query{
+		Until:      hotCutoff.UnixNano(),
+		Operations: []string{schema.OpModify.String()},
+		OrderDesc:  true,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("query versions: %w", err)
+	}
+
+	var toDelete []string
+	for _, fileEvents := range groupByFile(events) {
+		if len(fileEvents) <= limit {
+			continue
+		}
+		sort.Slice(fileEvents, func(i, j int) bool {
+			return fileEvents[i].TimestampNano > fileEvents[j].TimestampNano
+		})
+		for _, e := range fileEvents[limit:] {
+			toDelete = append(toDelete, e.EventID)
 		}
 	}
 
-	return toDelete
+	return c.deleteBatch(toDelete, "version-cap", fmt.Sprintf("max %d versions per file", limit))
 }
 
 // enforceStorageLimit checks total storage usage and applies increasingly aggressive
 // compaction if the max_storage_gb limit is exceeded.
-func (c *Compactor) enforceStorageLimit() (int, int64, error) {
+func (c *Compactor) enforceStorageLimit() (int, int, int64, error) {
 	if c.retention.MaxStorageGB <= 0 {
-		return 0, 0, nil
+		return 0, 0, 0, nil
 	}
 
 	maxBytes := int64(c.retention.MaxStorageGB) * 1024 * 1024 * 1024
 
 	totalBytes, _, err := c.objStore.Size()
 	if err != nil {
-		return 0, 0, fmt.Errorf("check storage size: %w", err)
+		return 0, 0, 0, fmt.Errorf("check storage size: %w", err)
 	}
 
 	if totalBytes <= maxBytes {
-		return 0, 0, nil
+		return 0, 0, 0, nil
 	}
 
 	overageBytes := totalBytes - maxBytes
-	log.Printf("belay: storage %.2f GB exceeds limit %.2f GB (over by %.2f MB)",
+	c.logf("belay: storage %.2f GB exceeds limit %.2f GB (over by %.2f MB)",
 		float64(totalBytes)/(1024*1024*1024),
 		float64(maxBytes)/(1024*1024*1024),
 		float64(overageBytes)/(1024*1024))
 
-	totalRemoved := 0
-	var totalFreed int64
-
-	// Strategy 1: Apply warm-tier rules to the hot tier (shrink hot window to half)
 	shrunkHotHours := c.retention.HotHours / 2
 	if shrunkHotHours < 1 {
 		shrunkHotHours = 1
@@ -522,61 +481,60 @@ func (c *Compactor) enforceStorageLimit() (int, int64, error) {
 		OrderDesc: false,
 	})
 	if err != nil {
-		return 0, 0, fmt.Errorf("query aggressive warm events: %w", err)
+		return 0, 0, 0, fmt.Errorf("query aggressive warm events: %w", err)
 	}
 
-	if len(aggressiveEvents) > 0 {
-		type fileSessionKey struct {
-			filePath  string
-			sessionID string
-		}
-		byFS := make(map[fileSessionKey][]*schema.Event)
-		for _, e := range aggressiveEvents {
-			key := fileSessionKey{filePath: e.FilePath, sessionID: e.SessionID}
-			byFS[key] = append(byFS[key], e)
-		}
-
-		var aggressiveDelete []string
-		for _, fsEvents := range byFS {
-			if len(fsEvents) < 2 {
-				continue
-			}
-			sort.Slice(fsEvents, func(i, j int) bool {
-				return fsEvents[i].TimestampNano < fsEvents[j].TimestampNano
-			})
-			aggressiveDelete = append(aggressiveDelete, findRapidEditBursts(fsEvents)...)
-		}
-
-		if len(aggressiveDelete) > 0 {
-			if c.dryRun {
-				log.Printf("belay: [dry-run] storage limit: would aggressively compact %d events from hot tier", len(aggressiveDelete))
-				totalRemoved += len(aggressiveDelete)
-			} else {
-				deleted, delErr := c.idx.DeleteEventsBatch(aggressiveDelete)
-				if delErr != nil {
-					return totalRemoved, totalFreed, delErr
-				}
-				totalRemoved += int(deleted)
-				log.Printf("belay: storage limit: aggressively compacted %d events from hot tier", deleted)
-			}
-
-			// Run GC to free orphaned objects
-			gcResult, gcErr := GarbageCollect(c.idx, c.objStore, c.dryRun)
-			if gcErr != nil {
-				return totalRemoved, totalFreed, gcErr
-			}
-			totalFreed += gcResult.BytesFreed
-		}
+	var aggressiveDelete []string
+	for _, fsEvents := range groupByFileSession(aggressiveEvents) {
+		aggressiveDelete = append(aggressiveDelete, hourlyCollapse(fsEvents)...)
+	}
+	if len(aggressiveDelete) == 0 {
+		return 0, 0, 0, nil
 	}
 
-	return totalRemoved, totalFreed, nil
+	removed, err := c.deleteBatch(aggressiveDelete, "storage-limit", "hot tier shrunk to half")
+	if err != nil {
+		return 0, 0, 0, err
+	}
+
+	gcResult, err := GarbageCollect(c.idx, c.objStore, c.dryRun)
+	if err != nil {
+		return removed, 0, 0, err
+	}
+	return removed, gcResult.OrphanedObjects, gcResult.BytesFreed, nil
 }
 
-// groupByFile organizes events into a map keyed by file path.
+// groupByFile organizes compactable events into a map keyed by file path.
 func groupByFile(events []*schema.Event) map[string][]*schema.Event {
 	byFile := make(map[string][]*schema.Event)
 	for _, e := range events {
+		if !compactable(e) {
+			continue
+		}
 		byFile[e.FilePath] = append(byFile[e.FilePath], e)
 	}
 	return byFile
+}
+
+type fileSessionKey struct {
+	filePath  string
+	sessionID string
+}
+
+// groupByFileSession organizes compactable events by file+session, each group sorted ascending.
+func groupByFileSession(events []*schema.Event) map[fileSessionKey][]*schema.Event {
+	groups := make(map[fileSessionKey][]*schema.Event)
+	for _, e := range events {
+		if !compactable(e) {
+			continue
+		}
+		key := fileSessionKey{filePath: e.FilePath, sessionID: e.SessionID}
+		groups[key] = append(groups[key], e)
+	}
+	for _, g := range groups {
+		sort.Slice(g, func(i, j int) bool {
+			return g[i].TimestampNano < g[j].TimestampNano
+		})
+	}
+	return groups
 }

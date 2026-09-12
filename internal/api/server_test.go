@@ -99,6 +99,7 @@ func newTestFixture(t *testing.T) *testFixture {
 	mux.HandleFunc("GET /api/files/content", srv.handleFileContent)
 	mux.HandleFunc("GET /api/conflicts", srv.handleConflicts)
 	mux.HandleFunc("GET /api/stats", srv.handleStats)
+	mux.HandleFunc("POST /api/compact", srv.handleCompact)
 	mux.HandleFunc("POST /api/record", srv.handleRecord)
 	mux.HandleFunc("GET /api/stream", srv.handleStream)
 
@@ -115,15 +116,15 @@ func newTestFixture(t *testing.T) *testFixture {
 func (f *testFixture) addEvent(eventID, filePath string, op schema.Operation, sessionID string, ts time.Time) {
 	f.t.Helper()
 	ev := &schema.Event{
-		EventID:       eventID,
-		TimestampNano: ts.UnixNano(),
-		FilePath:      filePath,
-		Op:            op,
-		ContentHash:   "abc123",
-		PreviousHash:  "def456",
-		ContentSize:   100,
-		SessionID:     sessionID,
-		Attribution:   schema.AttrPID,
+		EventID:               eventID,
+		TimestampNano:         ts.UnixNano(),
+		FilePath:              filePath,
+		Op:                    op,
+		ContentHash:           "abc123",
+		PreviousHash:          "def456",
+		ContentSize:           100,
+		SessionID:             sessionID,
+		Attribution:           schema.AttrPID,
 		AttributionConfidence: 0.95,
 	}
 	if err := f.idx.IndexEvent(ev, "seg.log", 0); err != nil {
@@ -135,15 +136,15 @@ func (f *testFixture) addEvent(eventID, filePath string, op schema.Operation, se
 func (f *testFixture) addEventWithHash(eventID, filePath string, op schema.Operation, sessionID, contentHash, prevHash string, ts time.Time) {
 	f.t.Helper()
 	ev := &schema.Event{
-		EventID:       eventID,
-		TimestampNano: ts.UnixNano(),
-		FilePath:      filePath,
-		Op:            op,
-		ContentHash:   contentHash,
-		PreviousHash:  prevHash,
-		ContentSize:   100,
-		SessionID:     sessionID,
-		Attribution:   schema.AttrPID,
+		EventID:               eventID,
+		TimestampNano:         ts.UnixNano(),
+		FilePath:              filePath,
+		Op:                    op,
+		ContentHash:           contentHash,
+		PreviousHash:          prevHash,
+		ContentSize:           100,
+		SessionID:             sessionID,
+		Attribution:           schema.AttrPID,
 		AttributionConfidence: 0.95,
 	}
 	if err := f.idx.IndexEvent(ev, "seg.log", 0); err != nil {
@@ -1764,5 +1765,70 @@ func TestNew(t *testing.T) {
 	}
 	if srv.cfg != cfg {
 		t.Error("cfg not set correctly")
+	}
+}
+
+type fakeCompactionProvider struct {
+	calls  int
+	dryRun bool
+}
+
+func (f *fakeCompactionProvider) WatcherHealth() map[string]interface{} {
+	return map[string]interface{}{"status": "running"}
+}
+func (f *fakeCompactionProvider) OverallStatus() string { return "ok" }
+func (f *fakeCompactionProvider) CompactionStatus() map[string]interface{} {
+	return map[string]interface{}{"interval": "1h0m0s", "running": false}
+}
+func (f *fakeCompactionProvider) RunCompactionNow(dryRun bool) (*store.CompactionResult, error) {
+	f.calls++
+	f.dryRun = dryRun
+	return &store.CompactionResult{EventsRemoved: 7, BytesFreed: 4096, TierBreakdown: map[string]int{}}, nil
+}
+
+func TestHandleCompact_TriggersProviderAndReportsResult(t *testing.T) {
+	f := newTestFixture(t)
+	fake := &fakeCompactionProvider{}
+	f.server.watcherHealth = fake
+
+	rec := f.doRequest("POST", "/api/compact?dry_run=1", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if fake.calls != 1 || !fake.dryRun {
+		t.Errorf("provider calls=%d dryRun=%v, want 1/true", fake.calls, fake.dryRun)
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	result := resp["result"].(map[string]interface{})
+	if result["events_removed"].(float64) != 7 {
+		t.Errorf("events_removed = %v, want 7", result["events_removed"])
+	}
+	if _, ok := resp["status"].(map[string]interface{})["interval"]; !ok {
+		t.Error("response should include compaction status")
+	}
+}
+
+func TestHandleCompact_UnavailableWithoutProvider(t *testing.T) {
+	f := newTestFixture(t)
+	rec := f.doRequest("POST", "/api/compact", nil)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
+	}
+}
+
+func TestHandleStats_IncludesCompactionWhenAvailable(t *testing.T) {
+	f := newTestFixture(t)
+	f.server.watcherHealth = &fakeCompactionProvider{}
+	rec := f.doRequest("GET", "/api/stats", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var resp map[string]interface{}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if _, ok := resp["compaction"]; !ok {
+		t.Error("stats should expose compaction status")
 	}
 }

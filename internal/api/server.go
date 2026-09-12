@@ -34,6 +34,12 @@ type WatcherHealthProvider interface {
 	OverallStatus() string
 }
 
+// CompactionProvider exposes the daemon's retention schedule and an on-demand trigger.
+type CompactionProvider interface {
+	CompactionStatus() map[string]interface{}
+	RunCompactionNow(dryRun bool) (*store.CompactionResult, error)
+}
+
 // Server is the HTTP API server for querying events, sessions, and streaming real-time updates.
 type Server struct {
 	cfg      *config.Config
@@ -105,6 +111,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("GET /api/conflicts", s.handleConflicts)
 
 	mux.HandleFunc("GET /api/stats", s.handleStats)
+	mux.HandleFunc("POST /api/compact", s.handleCompact)
 
 	mux.HandleFunc("POST /api/record", s.handleRecord)
 	mux.HandleFunc("POST /api/checkpoint", s.handleCheckpoint)
@@ -570,6 +577,9 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		"store_bytes":     storeBytes,
 		"store_objects":   objectCount,
 	}
+	if cp, ok := s.watcherHealth.(CompactionProvider); ok && cp != nil {
+		result["compaction"] = cp.CompactionStatus()
+	}
 
 	s.statsCacheMu.Lock()
 	s.statsCache = result
@@ -577,6 +587,31 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	s.statsCacheMu.Unlock()
 
 	writeJSON(w, result)
+}
+
+func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
+	cp, ok := s.watcherHealth.(CompactionProvider)
+	if !ok || cp == nil {
+		writeError(w, http.StatusServiceUnavailable, "compaction not available")
+		return
+	}
+
+	dryRun := r.URL.Query().Get("dry_run") == "true" || r.URL.Query().Get("dry_run") == "1"
+	result, err := cp.RunCompactionNow(dryRun)
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+
+	s.statsCacheMu.Lock()
+	s.statsCache = nil
+	s.statsCacheMu.Unlock()
+
+	writeJSON(w, map[string]interface{}{
+		"dry_run": dryRun,
+		"result":  result,
+		"status":  cp.CompactionStatus(),
+	})
 }
 
 // RecordRequest is the JSON payload for the POST /api/record endpoint.

@@ -204,10 +204,13 @@ compression_enabled = true
 
 [retention]
 hot_hours = 24        # full fidelity
-warm_days = 7         # rapid edits collapsed
+warm_days = 7         # hourly granularity (last modify per file/session/hour)
 cold_days = 30        # session boundaries only
 archive_days = 365    # daily snapshots (0 = forever)
 max_storage_gb = 10
+compaction_interval_min = 60   # daemon runs compaction hourly + shortly after startup
+max_versions_per_file = 25     # cap MODIFY versions per file beyond hot (0 = unlimited)
+compact_segments = false       # rewrite sealed event-log segments so purged events leave disk
 
 [api]
 port = 33412

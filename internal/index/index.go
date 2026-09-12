@@ -55,6 +55,7 @@ CREATE INDEX IF NOT EXISTS idx_events_file_path ON events(file_path);
 CREATE INDEX IF NOT EXISTS idx_events_session_id ON events(session_id);
 CREATE INDEX IF NOT EXISTS idx_events_operation ON events(operation);
 CREATE INDEX IF NOT EXISTS idx_events_file_time ON events(file_path, timestamp_nano);
+CREATE INDEX IF NOT EXISTS idx_events_segment ON events(segment_file);
 
 CREATE TABLE IF NOT EXISTS sessions (
     session_id TEXT PRIMARY KEY,
@@ -72,6 +73,11 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at);
+
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT ''
+);
 `
 
 // Open opens or creates a SQLite index database at the given path with WAL mode enabled.

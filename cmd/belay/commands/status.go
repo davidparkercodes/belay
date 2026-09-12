@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/davidparkercodes/belay/internal/config"
 	"github.com/davidparkercodes/belay/internal/daemon"
+	"github.com/davidparkercodes/belay/internal/index"
+	"github.com/davidparkercodes/belay/internal/store"
 
 	"github.com/spf13/cobra"
 )
@@ -45,7 +48,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	if jsonOutput {
 		status := map[string]interface{}{
 			"project_root":   projectRoot,
-			"belay_path":    cfg.BelayPath,
+			"belay_path":     cfg.BelayPath,
 			"daemon_running": daemonRunning,
 			"daemon_pid":     daemonPID,
 		}
@@ -79,7 +82,38 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	fmt.Printf("    Total:   %s\n", humanBytes(eventsSize+objectsSize+indexSize))
 	fmt.Println()
 
+	printCompactionStatus(cfg)
+
 	return nil
+}
+
+func printCompactionStatus(cfg *config.Config) {
+	idx, err := index.Open(cfg.IndexPath())
+	if err != nil {
+		return
+	}
+	defer idx.Close()
+
+	last, _ := idx.GetMeta(index.MetaLastCompactionAt)
+	fmt.Println("  Compaction:")
+	fmt.Printf("    Interval: every %s\n", cfg.Retention.CompactionInterval())
+	if last == "" {
+		fmt.Println("    Last run: never")
+		fmt.Println()
+		return
+	}
+	if t, err := time.Parse(time.RFC3339, last); err == nil {
+		fmt.Printf("    Last run: %s ago\n", time.Since(t).Round(time.Minute))
+	} else {
+		fmt.Printf("    Last run: %s\n", last)
+	}
+	if raw, _ := idx.GetMeta(index.MetaLastCompactionResult); raw != "" {
+		var r store.CompactionResult
+		if json.Unmarshal([]byte(raw), &r) == nil {
+			fmt.Printf("    Result:   removed %d events, freed %s\n", r.EventsRemoved, humanBytes(r.BytesFreed))
+		}
+	}
+	fmt.Println()
 }
 
 func dirSize(path string) (int64, error) {

@@ -165,7 +165,25 @@ func ReadSegmentTolerant(segPath string) ([]RecoveredEvent, int, error) {
 		return nil, 0, fmt.Errorf("read segment: %w", err)
 	}
 
-	var results []RecoveredEvent
+	frames, skipped := scanFrames(data)
+	results := make([]RecoveredEvent, 0, len(frames))
+	for _, f := range frames {
+		results = append(results, RecoveredEvent{Event: f.Event, Offset: f.Offset})
+	}
+	return results, skipped, nil
+}
+
+// recoveredFrame is a decoded event together with the raw frame bytes it was parsed from.
+type recoveredFrame struct {
+	Event  *schema.Event
+	Offset int64
+	Raw    []byte
+}
+
+// scanFrames applies the tolerant frame parser to raw segment bytes and returns every
+// recoverable frame (with its original bytes) plus the count of corrupted frames.
+func scanFrames(data []byte) ([]recoveredFrame, int) {
+	var results []recoveredFrame
 	skipped := 0
 	offset := 0
 
@@ -203,7 +221,7 @@ func ReadSegmentTolerant(segPath string) ([]RecoveredEvent, int, error) {
 			// Fast path: valid checksum
 			event, err := unmarshalEventJSON(jsonPayload)
 			if err == nil {
-				results = append(results, RecoveredEvent{Event: event, Offset: int64(offset)})
+				results = append(results, recoveredFrame{Event: event, Offset: int64(offset), Raw: data[offset : offset+frameLen]})
 				offset += frameLen
 				continue
 			}
@@ -213,7 +231,7 @@ func ReadSegmentTolerant(segPath string) ([]RecoveredEvent, int, error) {
 		// Common corruption: trailing garbage byte(s) appended to JSON payload.
 		event := tryTolerantParse(jsonPayload)
 		if event != nil {
-			results = append(results, RecoveredEvent{Event: event, Offset: int64(offset)})
+			results = append(results, recoveredFrame{Event: event, Offset: int64(offset), Raw: data[offset : offset+frameLen]})
 			offset += frameLen
 			skipped++ // still count as a corrupted frame even though we recovered it
 			continue
@@ -224,7 +242,7 @@ func ReadSegmentTolerant(segPath string) ([]RecoveredEvent, int, error) {
 		offset++
 	}
 
-	return results, skipped, nil
+	return results, skipped
 }
 
 // unmarshalEventJSON parses a JSON payload into a schema.Event.

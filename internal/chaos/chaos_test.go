@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -14,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/davidparkercodes/belay/internal/config"
 	"github.com/davidparkercodes/belay/internal/conflict"
 	"github.com/davidparkercodes/belay/internal/eventlog"
 	"github.com/davidparkercodes/belay/internal/index"
@@ -425,9 +428,9 @@ func TestChaos_DeleteRestoreChain(t *testing.T) {
 	const modCount = 5
 
 	type fileRecord struct {
-		path         string
-		hashes       []string // CREATE + 5 MODIFYs
-		contents     [][]byte
+		path          string
+		hashes        []string // CREATE + 5 MODIFYs
+		contents      [][]byte
 		deleteEventID string
 	}
 
@@ -912,8 +915,8 @@ func TestChaos_SessionAttribution(t *testing.T) {
 		{schema.AttrTemporal, 0.7, "session-temporal"},
 		{schema.AttrHeuristic, 0.6, "session-heuristic"},
 		{schema.AttrHeuristic, 0.6, "session-heuristic"},
-		{schema.AttrNone, 0.0, ""},     // No session
-		{schema.AttrNone, 0.0, ""},     // No session
+		{schema.AttrNone, 0.0, ""}, // No session
+		{schema.AttrNone, 0.0, ""}, // No session
 	}
 
 	for i, ac := range cases {
@@ -1572,10 +1575,10 @@ func TestChaos_WorktreeTracking(t *testing.T) {
 	}
 
 	type worktreeResult struct {
-		name          string
-		path          string
-		editPaths     []string
-		newFilePaths  []string
+		name         string
+		path         string
+		editPaths    []string
+		newFilePaths []string
 	}
 
 	worktrees := make([]worktreeResult, worktreeCount)
@@ -1875,12 +1878,12 @@ func TestChaos_WorktreeScaleBurst(t *testing.T) {
 			"performance",
 			time.Since(start).Milliseconds(),
 			map[string]int{
-				"repo_files":           repoFileCount,
-				"worktrees":            worktreeCount,
-				"checkout_creates":     repoFileCount * worktreeCount,
-				"filtered_creates":     totalCheckoutFiltered,
-				"real_edits":           editsPerWorktree * worktreeCount,
-				"new_files":            newFilesPerWorktree * worktreeCount,
+				"repo_files":       repoFileCount,
+				"worktrees":        worktreeCount,
+				"checkout_creates": repoFileCount * worktreeCount,
+				"filtered_creates": totalCheckoutFiltered,
+				"real_edits":       editsPerWorktree * worktreeCount,
+				"new_files":        newFilesPerWorktree * worktreeCount,
 			},
 			passed, errMsg)
 	}()
@@ -1920,10 +1923,10 @@ func TestChaos_WorktreeScaleBurst(t *testing.T) {
 	}
 
 	type wtResult struct {
-		name         string
-		path         string
-		editPaths    []string
-		newPaths     []string
+		name      string
+		path      string
+		editPaths []string
+		newPaths  []string
 	}
 
 	results := make([]wtResult, worktreeCount)
@@ -2096,3 +2099,81 @@ func TestChaos_WorktreeScaleBurst(t *testing.T) {
 		totalCheckoutFiltered, len(allEvents), len(snap.Files))
 }
 
+// ─── Scenario: Purge Durability ──────────────────────────────────────────────
+
+func TestChaos_PurgeDurability(t *testing.T) {
+	start := time.Now()
+	passed := true
+	defer func() {
+		RecordScenario("purge_durability", "Purge Durability", "3 sealed segments, version cap + segment rewrite, rebuild must not resurrect purged events", "integrity",
+			time.Since(start).Milliseconds(), map[string]int{"segments": 3, "events": 60}, passed, "")
+	}()
+	dir := tempDir(t)
+	objStore := newStore(t, dir)
+	idx := newIndex(t, dir)
+	eventsDir := filepath.Join(dir, "events")
+
+	base := time.Now().Add(-10 * 24 * time.Hour)
+	tick := 0
+	for seg := 0; seg < 3; seg++ {
+		if seg > 0 {
+			time.Sleep(1100 * time.Millisecond)
+			name := time.Now().Format("20060102-150405") + ".log"
+			f, err := os.OpenFile(filepath.Join(eventsDir, name), os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0644)
+			if err != nil {
+				t.Fatalf("create segment: %v", err)
+			}
+			f.Close()
+		}
+		w, err := eventlog.NewWriter(eventsDir, 1<<30)
+		if err != nil {
+			t.Fatalf("NewWriter: %v", err)
+		}
+		for i := 0; i < 20; i++ {
+			tick++
+			content := []byte(fmt.Sprintf("seg%d-v%d", seg, i))
+			hash, _, err := objStore.Put(content)
+			if err != nil {
+				t.Fatalf("Put: %v", err)
+			}
+			evt := makeEvent(fmt.Sprintf("pd-%d-%d", seg, i), "churn.log", schema.OpModify, hash, "", fmt.Sprintf("s%d", tick), base.Add(time.Duration(tick)*time.Hour))
+			if err := w.Append(evt); err != nil {
+				t.Fatalf("Append: %v", err)
+			}
+			if err := idx.IndexEvent(evt, w.CurrentSegment(), w.CurrentOffset()); err != nil {
+				t.Fatalf("IndexEvent: %v", err)
+			}
+		}
+		w.Close()
+	}
+
+	retention := &config.RetentionConfig{HotHours: 24, WarmDays: 365, ColdDays: 365, ArchiveDays: 365, MaxVersionsPerFile: 5, CompactSegments: true}
+	compactor := store.NewCompactor(idx, objStore, retention, false)
+	compactor.SetEventsDir(eventsDir)
+	result, err := compactor.RunCompaction()
+	if err != nil {
+		passed = false
+		t.Fatalf("RunCompaction: %v", err)
+	}
+	if result.EventsRemoved != 55 || result.ObjectsFreed != 55 {
+		passed = false
+		t.Errorf("removed=%d objects=%d, want 55/55", result.EventsRemoved, result.ObjectsFreed)
+	}
+	if result.Segments == nil || result.Segments.SegmentsDeleted != 2 {
+		passed = false
+		t.Errorf("expected both fully-purged sealed segments deleted, got %+v", result.Segments)
+	}
+
+	idx.Close()
+	res, err := index.Rebuild(filepath.Join(dir, "index.db"), eventsDir, log.New(io.Discard, "", 0))
+	if err != nil {
+		passed = false
+		t.Fatalf("Rebuild: %v", err)
+	}
+	// The active (newest) segment is never rewritten, so its 15 purged events come back on rebuild
+	// until it is sealed; the two sealed segments must stay purged.
+	if res.EventsIndexed != 20 {
+		passed = false
+		t.Errorf("rebuild indexed %d events, want 20 (5 kept + 15 in the still-active segment)", res.EventsIndexed)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -39,6 +40,12 @@ const (
 
 	// DefaultMaxStorageGB is the default storage budget in gigabytes.
 	DefaultMaxStorageGB = 10
+
+	// DefaultCompactionIntervalMin is how often (wall-clock minutes) the daemon runs compaction.
+	DefaultCompactionIntervalMin = 60
+
+	// DefaultMaxVersionsPerFile caps retained MODIFY versions per file beyond the hot tier.
+	DefaultMaxVersionsPerFile = 25
 
 	// DefaultMaxFileSizeMB is the default max file size for content capture (50 MB).
 	DefaultMaxFileSizeMB = 50
@@ -108,11 +115,30 @@ type StorageConfig struct {
 
 // RetentionConfig holds tiered retention policy durations.
 type RetentionConfig struct {
-	HotHours      int `toml:"hot_hours"`
-	WarmDays      int `toml:"warm_days"`
-	ColdDays      int `toml:"cold_days"`
-	ArchiveDays   int `toml:"archive_days"`
-	MaxStorageGB  int `toml:"max_storage_gb"`
+	HotHours     int `toml:"hot_hours"`
+	WarmDays     int `toml:"warm_days"`
+	ColdDays     int `toml:"cold_days"`
+	ArchiveDays  int `toml:"archive_days"`
+	MaxStorageGB int `toml:"max_storage_gb"`
+
+	// CompactionIntervalMin is the wall-clock interval between automatic compaction runs.
+	CompactionIntervalMin int `toml:"compaction_interval_min"`
+
+	// MaxVersionsPerFile caps how many MODIFY versions of a single file are retained
+	// beyond the hot tier (0 = unlimited).
+	MaxVersionsPerFile int `toml:"max_versions_per_file"`
+
+	// CompactSegments rewrites sealed event-log segments after compaction so purged
+	// events are removed from disk and cannot resurface on an index rebuild.
+	CompactSegments bool `toml:"compact_segments"`
+}
+
+// CompactionInterval returns the automatic compaction interval as a duration.
+func (r RetentionConfig) CompactionInterval() time.Duration {
+	if r.CompactionIntervalMin <= 0 {
+		return time.Duration(DefaultCompactionIntervalMin) * time.Minute
+	}
+	return time.Duration(r.CompactionIntervalMin) * time.Minute
 }
 
 // APIConfig holds HTTP API server settings.
@@ -154,6 +180,10 @@ func DefaultConfig(projectRoot string) *Config {
 			ColdDays:     DefaultColdDays,
 			ArchiveDays:  DefaultArchiveDays,
 			MaxStorageGB: DefaultMaxStorageGB,
+
+			CompactionIntervalMin: DefaultCompactionIntervalMin,
+			MaxVersionsPerFile:    DefaultMaxVersionsPerFile,
+			CompactSegments:       false,
 		},
 		API: APIConfig{
 			Port:    DefaultAPIPort,
@@ -262,6 +292,19 @@ archive_days = %d
 # Storage budget in GB (triggers aggressive compaction when exceeded)
 max_storage_gb = %d
 
+# Wall-clock minutes between automatic compaction runs. The daemon also runs
+# compaction shortly after startup when the last run is older than this.
+compaction_interval_min = %d
+
+# Max MODIFY versions kept per file beyond the hot tier (0 = unlimited).
+# Caps churny files (logs, lockfiles, test artifacts) that otherwise pin
+# hundreds of content blobs forever.
+max_versions_per_file = %d
+
+# Rewrite sealed event-log segments after compaction so purged events are
+# removed from disk (reclaims .belay/events and makes purge survive a rebuild).
+compact_segments = %v
+
 [api]
 # HTTP API port for dashboard and external tools
 port = %d
@@ -282,6 +325,7 @@ allow_writes = %v
 		c.Watcher.DebounceMs, c.Watcher.ExcludeHidden, c.Watcher.MaxFileSizeMB,
 		c.Storage.SegmentMaxBytes, c.Storage.FsyncMode, c.Storage.FsyncIntervalMs, c.Storage.CompressionEnabled,
 		c.Retention.HotHours, c.Retention.WarmDays, c.Retention.ColdDays, c.Retention.ArchiveDays, c.Retention.MaxStorageGB,
+		c.Retention.CompactionIntervalMin, c.Retention.MaxVersionsPerFile, c.Retention.CompactSegments,
 		c.API.Port, c.API.Host, c.API.Enabled,
 		c.Safety.AllowWrites,
 	)

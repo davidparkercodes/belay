@@ -3,8 +3,10 @@
 package daemon
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strconv"
@@ -48,15 +50,37 @@ type Daemon struct {
 	watchdogRestarts int
 	burst          *burstDetector
 	pidLock        *pidLock
+	logFile        *rotatingFile
+
+	compactionMu      sync.Mutex
+	compactionRunning bool
+	lastCompactionAt  time.Time
+	lastCompaction    *store.CompactionResult
+	lastCompactionErr string
 }
+
+// compactionStartupSettle is how long after startup the first compaction check waits,
+// so it does not compete with index warmup and the initial watcher scan.
+const compactionStartupSettle = 2 * time.Minute
+
+// compactionPoll is how often the compaction loop compares wall-clock time against the
+// configured interval. A short poll (rather than one long ticker) is what makes the
+// schedule survive laptop sleep and daemon restarts.
+const compactionPoll = time.Minute
 
 // New creates a new Daemon with the given configuration.
 func New(cfg *config.Config, version string) (*Daemon, error) {
 	d := &Daemon{
 		cfg:     cfg,
 		version: version,
-		logger:  log.New(os.Stderr, "[belay] ", log.LstdFlags),
 	}
+
+	var out io.Writer = os.Stderr
+	if lf, err := openRotatingFile(cfg.LogPath(), int64(cfg.Daemon.LogMaxSizeMB)*1024*1024, cfg.Daemon.LogMaxFiles); err == nil {
+		d.logFile = lf
+		out = io.MultiWriter(os.Stderr, lf)
+	}
+	d.logger = log.New(out, "[belay] ", log.LstdFlags)
 	return d, nil
 }
 
@@ -451,32 +475,142 @@ func (d *Daemon) cleanupStaleSessions() {
 
 func (d *Daemon) runCompactionLoop() {
 	defer close(d.compactionDone)
-	ticker := time.NewTicker(6 * time.Hour)
+
+	d.loadCompactionState()
+
+	select {
+	case <-time.After(compactionStartupSettle):
+	case <-d.stopCompaction:
+		return
+	}
+	d.compactIfDue()
+
+	ticker := time.NewTicker(compactionPoll)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			d.runAutoCompaction()
+			d.compactIfDue()
 		case <-d.stopCompaction:
 			return
 		}
 	}
 }
 
-func (d *Daemon) runAutoCompaction() {
-	start := time.Now()
-	compactor := store.NewCompactor(d.idx, d.objStore, &d.cfg.Retention, false)
-	result, err := compactor.RunCompaction()
-	if err != nil {
-		d.logger.Printf("auto-compaction failed: %v", err)
+func (d *Daemon) loadCompactionState() {
+	if v, err := d.idx.GetMeta(index.MetaLastCompactionAt); err == nil && v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			d.compactionMu.Lock()
+			d.lastCompactionAt = t
+			d.compactionMu.Unlock()
+		}
+	}
+	if v, err := d.idx.GetMeta(index.MetaLastCompactionResult); err == nil && v != "" {
+		var r store.CompactionResult
+		if json.Unmarshal([]byte(v), &r) == nil {
+			d.compactionMu.Lock()
+			d.lastCompaction = &r
+			d.compactionMu.Unlock()
+		}
+	}
+}
+
+func (d *Daemon) compactIfDue() {
+	d.compactionMu.Lock()
+	due := time.Since(d.lastCompactionAt) >= d.cfg.Retention.CompactionInterval()
+	d.compactionMu.Unlock()
+	if !due {
 		return
 	}
-	if result.EventsRemoved > 0 || result.BytesFreed > 0 {
-		d.logger.Printf("auto-compaction: reviewed %d events, removed %d, freed %s (%s)",
-			result.EventsReviewed, result.EventsRemoved,
-			formatBytes(result.BytesFreed), time.Since(start).Round(time.Millisecond))
+	if _, err := d.RunCompactionNow(false); err != nil && !errors.Is(err, errCompactionInProgress) {
+		d.logger.Printf("auto-compaction failed: %v", err)
 	}
+}
+
+var errCompactionInProgress = errors.New("compaction already in progress")
+
+// RunCompactionNow runs a full retention pass immediately. A dry run reports what would
+// change without touching the store or the schedule. Concurrent calls are rejected.
+func (d *Daemon) RunCompactionNow(dryRun bool) (*store.CompactionResult, error) {
+	d.compactionMu.Lock()
+	if d.compactionRunning {
+		d.compactionMu.Unlock()
+		return nil, errCompactionInProgress
+	}
+	d.compactionRunning = true
+	d.compactionMu.Unlock()
+
+	defer func() {
+		d.compactionMu.Lock()
+		d.compactionRunning = false
+		d.compactionMu.Unlock()
+	}()
+
+	start := time.Now()
+	compactor := store.NewCompactor(d.idx, d.objStore, &d.cfg.Retention, dryRun)
+	compactor.SetEventsDir(d.cfg.EventsDir())
+	compactor.SetLogger(d.logger.Printf)
+	result, err := compactor.RunCompaction()
+
+	if dryRun {
+		return result, err
+	}
+
+	d.compactionMu.Lock()
+	d.lastCompactionAt = start
+	if err != nil {
+		d.lastCompactionErr = err.Error()
+	} else {
+		d.lastCompactionErr = ""
+		d.lastCompaction = result
+	}
+	d.compactionMu.Unlock()
+
+	_ = d.idx.SetMeta(index.MetaLastCompactionAt, start.Format(time.RFC3339))
+	if err != nil {
+		return nil, err
+	}
+	if data, jerr := json.Marshal(result); jerr == nil {
+		_ = d.idx.SetMeta(index.MetaLastCompactionResult, string(data))
+	}
+
+	d.logger.Printf("compaction: reviewed %d events, removed %d, freed %s (%d objects, %s) in %s",
+		result.EventsReviewed, result.EventsRemoved, formatBytes(result.BytesFreed),
+		result.ObjectsFreed, segmentSummary(result), time.Since(start).Round(time.Millisecond))
+	return result, nil
+}
+
+func segmentSummary(r *store.CompactionResult) string {
+	if r.Segments == nil {
+		return "segments off"
+	}
+	return fmt.Sprintf("%d segments rewritten, %d deleted", r.Segments.SegmentsRewritten, r.Segments.SegmentsDeleted)
+}
+
+// CompactionStatus reports the compaction schedule and the outcome of the last run.
+func (d *Daemon) CompactionStatus() map[string]interface{} {
+	d.compactionMu.Lock()
+	defer d.compactionMu.Unlock()
+
+	interval := d.cfg.Retention.CompactionInterval()
+	status := map[string]interface{}{
+		"interval": interval.String(),
+		"running":  d.compactionRunning,
+	}
+	if !d.lastCompactionAt.IsZero() {
+		status["last_run_at"] = d.lastCompactionAt.Format(time.RFC3339)
+		status["next_run_at"] = d.lastCompactionAt.Add(interval).Format(time.RFC3339)
+	} else {
+		status["next_run_at"] = "pending (startup)"
+	}
+	if d.lastCompactionErr != "" {
+		status["last_error"] = d.lastCompactionErr
+	}
+	if d.lastCompaction != nil {
+		status["last_result"] = d.lastCompaction
+	}
+	return status
 }
 
 func formatBytes(b int64) string {
@@ -684,6 +818,10 @@ func (d *Daemon) cleanup() {
 	}
 
 	d.logger.Printf("shutdown: cleanup completed in %s", time.Since(start).Round(time.Millisecond))
+
+	if d.logFile != nil {
+		_ = d.logFile.Close()
+	}
 }
 
 // alreadyRunningError is returned when an attempt to start the daemon fails

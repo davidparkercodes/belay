@@ -26,12 +26,16 @@ func newGCCmd() *cobra.Command {
 
 Compaction tiers:
   hot     Full fidelity (every event kept)
-  warm    Rapid edits collapsed (consecutive modifies within 60s merged)
+  warm    Hourly granularity (last modify per file per session per hour)
   cold    Session boundaries only (first + last event per file per session)
   archive Daily snapshots (one event per file per day)
   purge   Events older than archive_days are deleted entirely
+  cap     At most max_versions_per_file modify versions per file beyond hot
 
-After compaction, orphaned objects are garbage collected.
+After compaction, orphaned objects are garbage collected. With
+retention.compact_segments = true, sealed event-log segments are rewritten so
+purged events are gone from disk too. The daemon runs this automatically
+(compaction_interval_min, default hourly, plus once shortly after startup).
 
 Use --dry-run to see what would be cleaned up without deleting anything.
 Use --gc-only to skip compaction and only garbage collect orphaned objects.`,
@@ -84,6 +88,7 @@ func runGC(cmd *cobra.Command, args []string) error {
 		}
 
 		compactor := store.NewCompactor(idx, objStore, &cfg.Retention, dryRun)
+		compactor.SetEventsDir(cfg.EventsDir())
 		compResult, compErr := compactor.RunCompaction()
 		if compErr != nil {
 			return fmt.Errorf("compaction: %w", compErr)
@@ -97,7 +102,16 @@ func runGC(cmd *cobra.Command, args []string) error {
 			fmt.Printf("  Events kept:      %d\n", compResult.EventsKept)
 			fmt.Printf("  Events removed:   %d\n", compResult.EventsRemoved)
 			if compResult.BytesFreed > 0 {
-				fmt.Printf("  Storage freed:    %s\n", formatBytes(compResult.BytesFreed))
+				fmt.Printf("  Storage freed:    %s (%d objects)\n", formatBytes(compResult.BytesFreed), compResult.ObjectsFreed)
+			}
+			if compResult.Segments != nil {
+				fmt.Printf("  Segments:         %d rewritten, %d deleted, %s freed\n",
+					compResult.Segments.SegmentsRewritten, compResult.Segments.SegmentsDeleted, formatBytes(compResult.Segments.BytesFreed))
+			} else if !cfg.Retention.CompactSegments {
+				fmt.Println("  Segments:         skipped (retention.compact_segments = false)")
+			}
+			if compResult.IndexVacuumed {
+				fmt.Println("  Index:            vacuumed")
 			}
 			if len(compResult.TierBreakdown) > 0 {
 				fmt.Println("\n  Tier Breakdown:")

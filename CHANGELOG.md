@@ -2,7 +2,7 @@
 
 All notable changes to Belay are documented here.
 
-## Unreleased
+## v1.6.0 - 2026-09-12
 
 ### Added
 - **`belay project`** (concurrency-safe Belay→git projection) -- Build a single git commit from a session's net changes and append it to a target ref (default `refs/heads/belay-history`) using git **plumbing only** (`hash-object` → throwaway index → `write-tree` → `commit-tree` → compare-and-swap `update-ref`). Unlike `belay commit`, it never touches the working tree, the index, or HEAD, so it is safe to run while other AI sessions edit the same checkout -- the core enabler for "many concurrent agents, one working tree, no collisions on HEAD." When the target ref does not yet exist it bootstraps a full base tree from `--base-ref` (default `HEAD`) so the projection branch is a complete, checkout-able tree rather than a sparse delta; later projections build on the prior tip. Paths inside git submodules (gitlinks in the superproject) are skipped. Flags: `--session`, `--to-ref`, `--base-ref`, `--message`, `--no-metadata`, `--dry-run`, `--push <remote>`. Pair with a Claude Code `Stop` hook to make git an automatic, write-only projection of Belay's live history.
@@ -12,6 +12,15 @@ All notable changes to Belay are documented here.
 - **`hooks/belay-pre-bash.sh`** -- PreToolUse Bash hook for Claude Code. Always-on, 2-second watchdog, never blocks the shell. Records a checkpoint labeled `pre-bash: <command>` in the cwd's Belay project before each Bash tool invocation. Install via `~/.claude/settings.json` PreToolUse hooks with matcher `Bash`.
 - **`POST /api/checkpoint`** and **`GET /api/checkpoints`** -- Daemon endpoints backing the new CLI. `/api/checkpoint` writes a CHECKPOINT event via the canonical `processEvent` path so the event log, SQLite index, and SSE stream stay consistent.
 - **Schema:** `OpCheckpoint` operation. Backwards-compatible (SchemaVersion stays 1; older readers see `UNKNOWN` and skip). `belay log` renders CHECKPOINT events with their label.
+- **Scheduled compaction** -- The daemon runs retention compaction on a wall-clock interval (`retention.compaction_interval_min`, default 60) that survives laptop sleep and daemon restarts: the last run is persisted in a new index `meta` table, polled once a minute, with a first pass shortly after startup. Replaces the old fixed 6h in-process ticker. Exposed via `POST /api/compact` (`dry_run`), a `compaction` block in `GET /api/stats`, and a Compaction section in `belay status`.
+- **`retention.compact_segments`** -- Rewrites sealed event-log segments after compaction so purged and compacted events actually leave `.belay/events` and cannot resurface on an index rebuild. Cross-process `flock`, a per-segment clean-cache skip, and the newest (still-appending) segment is never touched. `belay gc` reports segments rewritten/deleted and bytes freed.
+- **`retention.max_versions_per_file`** (default 25) -- Caps retained MODIFY versions per file beyond the hot tier, so churny files (logs, lockfiles, build artifacts) stop pinning content blobs forever. `0` = unlimited.
+- **Index VACUUM after compaction** -- A pass that removed events triggers a guarded `VACUUM` (free-page floor) so the SQLite index file shrinks on disk instead of only marking pages free.
+- **Rotating daemon log** -- The daemon writes to a size-capped rotating log file (`daemon.log_max_size_mb`, `daemon.log_max_files`) in addition to stderr.
+
+### Changed
+- **Warm-tier compaction is now hourly granularity** -- Collapses to the last MODIFY per file+session per clock hour, replacing the previous 60s "rapid-edit burst" heuristic. Creates, deletes, renames, checkpoints, and session meta-events are never removed by tier compaction.
+- **`belay gc`** now reports objects freed, segment rewrites, and index vacuum, and its help text documents the new per-file version cap and the automatic compaction schedule.
 
 ### Fixed
 - **Multi-daemon spawn from PID-file TOCTOU race**: The "is daemon already running?" pre-check read the PID file but never held a lock on it, so two `belay daemon start` invocations against the same project could both pass the check and start. One observed instance ended with five daemons live on the same `.belay/`, racing on the SQLite index, double-recording every event, and ballooning the object store to ~98 GB before any visible symptom. The PID file is now claimed via `flock(2)` (`syscall.Flock` on Unix, `O_EXCL`-with-stale-cleanup on Windows) and the lock is held for the daemon's lifetime; a losing second daemon returns `IsAlreadyRunning(err)` and exits without writing anything. Stale-PID cleanup moved into lock acquisition (atomic) so it cannot race against a live daemon that owns the flock.

@@ -266,39 +266,31 @@ func TestCompactor_WarmCompaction_RapidEdits(t *testing.T) {
 		t.Fatalf("RunCompaction: %v", err)
 	}
 
-	// Burst of 5 rapid modifies: keep first and last, remove 3 intermediates
-	if result.TierBreakdown["warm_compacted"] != 3 {
-		t.Errorf("warm_compacted = %d, want 3", result.TierBreakdown["warm_compacted"])
+	if result.TierBreakdown["warm_compacted"] != 4 {
+		t.Errorf("warm_compacted = %d, want 4 (one modify per hour survives)", result.TierBreakdown["warm_compacted"])
 	}
 
-	// First and last should survive
-	_, err = idx.GetEvent("warm-0")
-	if err != nil {
-		t.Error("first event in burst should be kept")
-	}
 	_, err = idx.GetEvent("warm-4")
 	if err != nil {
 		t.Error("last event in burst should be kept")
 	}
 
-	// Middle event should be gone
 	_, err = idx.GetEvent("warm-2")
 	if err == nil {
-		t.Error("intermediate rapid edit should have been removed")
+		t.Error("intermediate modify within the hour should have been removed")
 	}
 }
 
-func TestCompactor_WarmCompaction_NoRapidEdits(t *testing.T) {
+func TestCompactor_WarmCompaction_SpreadAcrossHours(t *testing.T) {
 	idx, objStore, retention := newTestCompactorEnv(t)
 
 	now := time.Now()
 	retention.HotHours = 24
 	retention.WarmDays = 7
 
-	// Insert events spaced far apart (2 minutes each, beyond rapidEditWindow of 60s)
-	baseTime := now.Add(-3 * 24 * time.Hour)
+	baseTime := now.Add(-3 * 24 * time.Hour).Truncate(time.Hour)
 	for i := 0; i < 3; i++ {
-		ts := baseTime.Add(time.Duration(i) * 2 * time.Minute)
+		ts := baseTime.Add(time.Duration(i) * 2 * time.Hour)
 		insertEvent(t, idx, fmt.Sprintf("warm-spread-%d", i), ts, "file.go", "s1",
 			schema.OpModify, fmt.Sprintf("ws%d", i), fmt.Sprintf("ws%d", i-1))
 	}
@@ -311,9 +303,8 @@ func TestCompactor_WarmCompaction_NoRapidEdits(t *testing.T) {
 		t.Fatalf("RunCompaction: %v", err)
 	}
 
-	// No rapid edits -- nothing should be compacted in warm tier
 	if result.TierBreakdown["warm_compacted"] != 0 {
-		t.Errorf("warm_compacted = %d, want 0 (no rapid edits)", result.TierBreakdown["warm_compacted"])
+		t.Errorf("warm_compacted = %d, want 0 (one modify per hour already)", result.TierBreakdown["warm_compacted"])
 	}
 }
 
@@ -324,9 +315,8 @@ func TestCompactor_WarmCompaction_MixedOperations(t *testing.T) {
 	retention.HotHours = 24
 	retention.WarmDays = 7
 
-	baseTime := now.Add(-3 * 24 * time.Hour)
+	baseTime := now.Add(-3 * 24 * time.Hour).Truncate(time.Hour)
 
-	// modify, modify, CREATE (breaks burst), modify, modify
 	insertEvent(t, idx, "wm-0", baseTime, "file.go", "s1", schema.OpModify, "a1", "")
 	insertEvent(t, idx, "wm-1", baseTime.Add(10*time.Second), "file.go", "s1", schema.OpModify, "a2", "a1")
 	insertEvent(t, idx, "wm-2", baseTime.Add(20*time.Second), "file.go", "s1", schema.OpCreate, "a3", "")
@@ -341,13 +331,152 @@ func TestCompactor_WarmCompaction_MixedOperations(t *testing.T) {
 		t.Fatalf("RunCompaction: %v", err)
 	}
 
-	// The CREATE at wm-2 breaks the burst into two segments:
-	// Burst 1: wm-0, wm-1 (2 modifies) -> keep both (burst of 2 has no intermediates)
-	// wm-2 is CREATE, not part of any burst
-	// Burst 2: wm-3, wm-4 (2 modifies) -> keep both (burst of 2 has no intermediates)
-	// Nothing should be removed
-	if result.TierBreakdown["warm_compacted"] != 0 {
-		t.Errorf("warm_compacted = %d, want 0 (no intermediates in 2-event bursts)", result.TierBreakdown["warm_compacted"])
+	if result.TierBreakdown["warm_compacted"] != 3 {
+		t.Errorf("warm_compacted = %d, want 3 (last modify of the hour + the create survive)", result.TierBreakdown["warm_compacted"])
+	}
+	if _, err := idx.GetEvent("wm-2"); err != nil {
+		t.Error("create event must never be collapsed")
+	}
+	if _, err := idx.GetEvent("wm-4"); err != nil {
+		t.Error("last modify of the hour should be kept")
+	}
+}
+
+func TestCompactor_MaxVersionsPerFile(t *testing.T) {
+	idx, objStore, retention := newTestCompactorEnv(t)
+
+	now := time.Now()
+	retention.MaxVersionsPerFile = 3
+	retention.WarmDays = 0
+	retention.ColdDays = 0
+
+	for i := 0; i < 10; i++ {
+		ts := now.Add(-time.Duration(30-i) * 24 * time.Hour)
+		insertEvent(t, idx, fmt.Sprintf("v-%d", i), ts, "churn.log", fmt.Sprintf("s%d", i),
+			schema.OpModify, fmt.Sprintf("vh%d", i), "")
+	}
+	insertEvent(t, idx, "v-hot", now.Add(-time.Hour), "churn.log", "s-hot", schema.OpModify, "vh-hot", "")
+	insertEvent(t, idx, "v-create", now.Add(-40*24*time.Hour), "churn.log", "s0", schema.OpCreate, "vh-c", "")
+
+	compactor := NewCompactor(idx, objStore, retention, false)
+	compactor.now = now
+
+	result, err := compactor.RunCompaction()
+	if err != nil {
+		t.Fatalf("RunCompaction: %v", err)
+	}
+
+	if result.TierBreakdown["version_capped"] != 7 {
+		t.Errorf("version_capped = %d, want 7", result.TierBreakdown["version_capped"])
+	}
+	for _, keep := range []string{"v-9", "v-8", "v-7", "v-hot", "v-create"} {
+		if _, err := idx.GetEvent(keep); err != nil {
+			t.Errorf("%s should be kept", keep)
+		}
+	}
+	if _, err := idx.GetEvent("v-0"); err == nil {
+		t.Error("oldest version beyond the cap should be removed")
+	}
+}
+
+func TestCompactor_MaxVersionsPerFile_Disabled(t *testing.T) {
+	idx, objStore, retention := newTestCompactorEnv(t)
+
+	now := time.Now()
+	retention.MaxVersionsPerFile = 0
+	for i := 0; i < 5; i++ {
+		insertEvent(t, idx, fmt.Sprintf("v-%d", i), now.Add(-time.Duration(10+i)*24*time.Hour), "f.go", fmt.Sprintf("s%d", i),
+			schema.OpModify, fmt.Sprintf("h%d", i), "")
+	}
+	compactor := NewCompactor(idx, objStore, retention, false)
+	compactor.now = now
+	result, err := compactor.RunCompaction()
+	if err != nil {
+		t.Fatalf("RunCompaction: %v", err)
+	}
+	if result.TierBreakdown["version_capped"] != 0 {
+		t.Errorf("version_capped = %d, want 0 when disabled", result.TierBreakdown["version_capped"])
+	}
+}
+
+func TestCompactor_CheckpointsNeverCollapsed(t *testing.T) {
+	idx, objStore, retention := newTestCompactorEnv(t)
+
+	now := time.Now()
+	baseTime := now.Add(-15 * 24 * time.Hour).Truncate(time.Hour)
+	for i := 0; i < 5; i++ {
+		insertEvent(t, idx, fmt.Sprintf("cp-%d", i), baseTime.Add(time.Duration(i)*time.Minute), "", "s1",
+			schema.OpCheckpoint, "", "")
+	}
+
+	compactor := NewCompactor(idx, objStore, retention, false)
+	compactor.now = now
+	result, err := compactor.RunCompaction()
+	if err != nil {
+		t.Fatalf("RunCompaction: %v", err)
+	}
+	if result.EventsRemoved != 0 {
+		t.Errorf("EventsRemoved = %d, want 0 (checkpoints are never compacted)", result.EventsRemoved)
+	}
+}
+
+func TestCompactor_VersionCapOrphansObjects(t *testing.T) {
+	idx, objStore, retention := newTestCompactorEnv(t)
+
+	now := time.Now()
+	retention.MaxVersionsPerFile = 1
+	retention.WarmDays = 0
+	retention.ColdDays = 0
+
+	var hashes []string
+	for i := 0; i < 4; i++ {
+		h, _, err := objStore.Put([]byte(fmt.Sprintf("version %d", i)))
+		if err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+		hashes = append(hashes, h)
+		insertEvent(t, idx, fmt.Sprintf("ov-%d", i), now.Add(-time.Duration(10-i)*24*time.Hour), "big.bin", fmt.Sprintf("s%d", i),
+			schema.OpModify, h, "")
+	}
+
+	compactor := NewCompactor(idx, objStore, retention, false)
+	compactor.now = now
+	result, err := compactor.RunCompaction()
+	if err != nil {
+		t.Fatalf("RunCompaction: %v", err)
+	}
+	if result.ObjectsFreed != 3 {
+		t.Errorf("ObjectsFreed = %d, want 3", result.ObjectsFreed)
+	}
+	if !objStore.Has(hashes[3]) {
+		t.Error("newest version blob must survive")
+	}
+	if objStore.Has(hashes[0]) {
+		t.Error("capped version blob should have been garbage collected")
+	}
+}
+
+func TestHourlyCollapse(t *testing.T) {
+	base := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	events := []*schema.Event{
+		{EventID: "a", TimestampNano: base.UnixNano(), Op: schema.OpModify},
+		{EventID: "b", TimestampNano: base.Add(5 * time.Minute).UnixNano(), Op: schema.OpModify},
+		{EventID: "c", TimestampNano: base.Add(50 * time.Minute).UnixNano(), Op: schema.OpDelete},
+		{EventID: "d", TimestampNano: base.Add(55 * time.Minute).UnixNano(), Op: schema.OpModify},
+		{EventID: "e", TimestampNano: base.Add(65 * time.Minute).UnixNano(), Op: schema.OpModify},
+	}
+	got := hourlyCollapse(events)
+	want := map[string]bool{"a": true, "b": true}
+	if len(got) != len(want) {
+		t.Fatalf("hourlyCollapse = %v, want a,b", got)
+	}
+	for _, id := range got {
+		if !want[id] {
+			t.Errorf("unexpected removal %s", id)
+		}
+	}
+	if hourlyCollapse(nil) != nil || hourlyCollapse(events[:1]) != nil {
+		t.Error("nil/single input must return nil")
 	}
 }
 
@@ -496,79 +625,6 @@ func TestCompactor_ColdCompaction_MultipleSessionsSameFile(t *testing.T) {
 	_, err = idx.GetEvent("sb-2")
 	if err != nil {
 		t.Error("session B last event should be kept")
-	}
-}
-
-func TestFindRapidEditBursts_Empty(t *testing.T) {
-	result := findRapidEditBursts(nil)
-	if len(result) != 0 {
-		t.Errorf("expected empty result for nil input, got %d", len(result))
-	}
-
-	result = findRapidEditBursts([]*schema.Event{})
-	if len(result) != 0 {
-		t.Errorf("expected empty result for empty input, got %d", len(result))
-	}
-}
-
-func TestFindRapidEditBursts_SingleEvent(t *testing.T) {
-	events := []*schema.Event{
-		{EventID: "e1", TimestampNano: time.Now().UnixNano(), Op: schema.OpModify},
-	}
-	result := findRapidEditBursts(events)
-	if len(result) != 0 {
-		t.Errorf("expected empty result for single event, got %d", len(result))
-	}
-}
-
-func TestFindRapidEditBursts_BurstOfThree(t *testing.T) {
-	now := time.Now()
-	events := []*schema.Event{
-		{EventID: "e1", TimestampNano: now.UnixNano(), Op: schema.OpModify},
-		{EventID: "e2", TimestampNano: now.Add(5 * time.Second).UnixNano(), Op: schema.OpModify},
-		{EventID: "e3", TimestampNano: now.Add(10 * time.Second).UnixNano(), Op: schema.OpModify},
-	}
-	result := findRapidEditBursts(events)
-	// Should remove the middle event (e2)
-	if len(result) != 1 {
-		t.Fatalf("expected 1 event to remove, got %d", len(result))
-	}
-	if result[0] != "e2" {
-		t.Errorf("expected e2 to be removed, got %s", result[0])
-	}
-}
-
-func TestFindRapidEditBursts_GapBreaksBurst(t *testing.T) {
-	now := time.Now()
-	events := []*schema.Event{
-		{EventID: "e1", TimestampNano: now.UnixNano(), Op: schema.OpModify},
-		{EventID: "e2", TimestampNano: now.Add(5 * time.Second).UnixNano(), Op: schema.OpModify},
-		// 2-minute gap breaks the burst
-		{EventID: "e3", TimestampNano: now.Add(2 * time.Minute).UnixNano(), Op: schema.OpModify},
-		{EventID: "e4", TimestampNano: now.Add(2*time.Minute + 5*time.Second).UnixNano(), Op: schema.OpModify},
-	}
-	result := findRapidEditBursts(events)
-	// Two bursts of 2 events each -- no intermediates to remove
-	if len(result) != 0 {
-		t.Errorf("expected 0 events to remove (bursts of 2 have no intermediates), got %d", len(result))
-	}
-}
-
-func TestFormatBytes(t *testing.T) {
-	tests := []struct {
-		input int64
-		want  string
-	}{
-		{0, "0 bytes"},
-		{500, "500 bytes"},
-		{1024, "1.00 KB"},
-		{1536, "1.50 KB"},
-		{1048576, "1.00 MB"},
-		{1073741824, "1.00 GB"},
-	}
-	for _, tt := range tests {
-		// formatBytes is in gc.go (commands package), so we test the logic equivalently
-		_ = tt
 	}
 }
 
