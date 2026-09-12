@@ -152,6 +152,18 @@ _belay_check_and_start() {
     fi
   fi
 
+  # Serialize concurrent shells entering the same repo. mkdir is atomic, so only
+  # one shell in a burst runs 'daemon start'. The daemon's own flock is the real
+  # guard against duplicates; this just stops N shells each fork/exec'ing a start.
+  local lockdir=".belay/daemon.lock"
+  if ! mkdir "$lockdir" 2>/dev/null; then
+    local lock_age
+    lock_age=$(( $(date +%%s) - $(stat -f %%m "$lockdir" 2>/dev/null || stat -c %%Y "$lockdir" 2>/dev/null || echo 0) ))
+    (( lock_age < 60 )) && return
+    rmdir "$lockdir" 2>/dev/null
+    mkdir "$lockdir" 2>/dev/null || return
+  fi
+
   local belay_bin="${BELAY_BIN:-}"
   if [[ -z "$belay_bin" ]]; then
     if [[ -x "%s" ]]; then
@@ -160,11 +172,27 @@ _belay_check_and_start() {
       belay_bin=${commands[belay]:-}
     fi
   fi
-  [[ -z "$belay_bin" ]] && return
+  if [[ -z "$belay_bin" ]]; then
+    rmdir "$lockdir" 2>/dev/null
+    return
+  fi
 
   "$belay_bin" daemon start >/dev/null 2>&1 || {
     echo "belay: warning: failed to auto-start daemon in $(pwd)" >&2
   }
+
+  # Hold the lock until the daemon writes its pidfile (a few seconds after start),
+  # backgrounded so the prompt returns immediately.
+  local lock_path="$PWD/$lockdir"
+  local pid_path="$PWD/$pidfile"
+  {
+    local waited=0
+    while (( waited < 20 )) && [[ ! -f "$pid_path" ]]; do
+      sleep 1
+      (( waited++ ))
+    done
+    rmdir "$lock_path" 2>/dev/null
+  } &!
 }
 
 if (( ${+chpwd_functions} )); then
@@ -194,6 +222,18 @@ _belay_check_and_start() {
     fi
   fi
 
+  # Serialize concurrent shells entering the same repo. mkdir is atomic, so only
+  # one shell in a burst runs 'daemon start'. The daemon's own flock is the real
+  # guard against duplicates; this just stops N shells each fork/exec'ing a start.
+  local lockdir=".belay/daemon.lock"
+  if ! mkdir "$lockdir" 2>/dev/null; then
+    local lock_age
+    lock_age=$(( $(date +%%s) - $(stat -f %%m "$lockdir" 2>/dev/null || stat -c %%Y "$lockdir" 2>/dev/null || echo 0) ))
+    (( lock_age < 60 )) && return
+    rmdir "$lockdir" 2>/dev/null
+    mkdir "$lockdir" 2>/dev/null || return
+  fi
+
   local belay_bin="${BELAY_BIN:-}"
   if [[ -z "$belay_bin" ]]; then
     if [[ -x "%s" ]]; then
@@ -202,11 +242,28 @@ _belay_check_and_start() {
       belay_bin=$(command -v belay 2>/dev/null || true)
     fi
   fi
-  [[ -z "$belay_bin" ]] && return
+  if [[ -z "$belay_bin" ]]; then
+    rmdir "$lockdir" 2>/dev/null
+    return
+  fi
 
   "$belay_bin" daemon start >/dev/null 2>&1 || {
     echo "belay: warning: failed to auto-start daemon in $(pwd)" >&2
   }
+
+  # Hold the lock until the daemon writes its pidfile (a few seconds after start),
+  # backgrounded so the prompt returns immediately.
+  local lock_path="$PWD/$lockdir"
+  local pid_path="$PWD/$pidfile"
+  {
+    local waited=0
+    while (( waited < 20 )) && [[ ! -f "$pid_path" ]]; do
+      sleep 1
+      (( waited++ ))
+    done
+    rmdir "$lock_path" 2>/dev/null
+  } &
+  disown 2>/dev/null || true
 }
 
 if [[ -z "$_BELAY_HOOK_INSTALLED" ]]; then

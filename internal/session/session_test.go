@@ -3,6 +3,7 @@ package session
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -795,7 +796,6 @@ func TestGetProcessCommand_InvalidPID(t *testing.T) {
 
 func TestGetProcessCwd_ValidPID(t *testing.T) {
 	cwd := getProcessCwd(os.Getpid())
-	// On macOS, lsof should return the cwd for our own process
 	if cwd == "" {
 		t.Skip("getProcessCwd returned empty (lsof may not be available or insufficient permissions)")
 	}
@@ -805,6 +805,19 @@ func TestGetProcessCwd_ValidPID(t *testing.T) {
 		t.Errorf("getProcessCwd returned path that doesn't exist: %q", cwd)
 	} else if !info.IsDir() {
 		t.Errorf("getProcessCwd returned non-directory: %q", cwd)
+	}
+
+	// It must be OUR cwd, not some other process's. Without lsof's -a flag the
+	// query ORs its selectors and returns an arbitrary process's directory, so
+	// compare against the real value (resolving symlinks; macOS /var vs /private/var).
+	want, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd: %v", err)
+	}
+	gotResolved, _ := filepath.EvalSymlinks(cwd)
+	wantResolved, _ := filepath.EvalSymlinks(want)
+	if gotResolved != wantResolved {
+		t.Errorf("getProcessCwd = %q, want %q (own working directory)", cwd, want)
 	}
 }
 

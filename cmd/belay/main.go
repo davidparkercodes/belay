@@ -8,7 +8,7 @@ import (
 	"github.com/davidparkercodes/belay/cmd/belay/commands"
 )
 
-var Version = "v1.6.0"
+var Version = "v1.6.1"
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))

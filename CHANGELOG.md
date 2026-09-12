@@ -2,6 +2,15 @@
 
 All notable changes to Belay are documented here.
 
+## v1.6.1 - 2026-09-12
+
+### Fixed
+- **`getProcessCwd` returned the wrong process's directory (missing `lsof -a`)**: session attribution asked `lsof -p PID -Fn -d cwd` for a process's working directory, but without `-a` lsof ORs its selectors instead of ANDing them, so the query read as "PID `PID`, or any process with a cwd" and enumerated every process on the machine. Each call scanned hundreds of processes (~1.2s, a full core) instead of one (~0.07s), and the parse returned an arbitrary process's cwd, misattributing file changes to the wrong session. The call now passes `-a` so lsof reports only the target PID.
+- **`getProcessCwd` now reads `/proc/<pid>/cwd` directly on Linux**: where the kernel exposes the working directory as a symlink, Belay reads it with a single `readlink` and skips the `lsof` subprocess entirely. This is cheaper and sidesteps the macOS `lsof` panic path on the platforms that do not need it; macOS has no `/proc`, so `readlink` fails there and the code falls through to the (now correct) `lsof` call.
+
+### Changed
+- **Shell hooks serialize concurrent daemon starts with an atomic lock**: the emitted `zsh` and `bash` hooks now take an atomic `mkdir .belay/daemon.lock` (60s stale-lock reclaim, released in a backgrounded subshell once the pidfile lands, so the prompt never blocks) before running `daemon start`. A burst of shells entering the same repo at once no longer each fork/exec a doomed `daemon start`. The daemon's own `flock` remains the authoritative duplicate guard; this only trims the wasted process churn on top of it.
+
 ## v1.6.0 - 2026-09-12
 
 ### Added

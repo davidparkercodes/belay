@@ -51,15 +51,28 @@ func getProcessCommand(pid int) string {
 	return strings.TrimSpace(string(out))
 }
 
-// getProcessCwd returns the current working directory of a process using lsof.
+// getProcessCwd returns the current working directory of a process.
 // Serialized + time-boxed because lsof on macOS 26 has triggered kernel panics
 // under concurrency; see lsofMu for the full context.
 func getProcessCwd(pid int) string {
+	// Linux exposes the cwd directly as a kernel symlink, so no subprocess is
+	// needed at all (cheaper, and avoids the macOS lsof panic path). On macOS
+	// this path does not exist and Readlink fails, falling through to lsof.
+	if cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid)); err == nil && cwd != "" {
+		if strings.Contains(cwd, "(") {
+			return ""
+		}
+		return cwd
+	}
+
 	lsofMu.Lock()
 	defer lsofMu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "lsof", "-p", strconv.Itoa(pid), "-Fn", "-d", "cwd").Output()
+	// -a is required: it ANDs the selectors so lsof reports only the target PID.
+	// Without it lsof ORs -p and -d, scans every process on the machine (~1.2s vs
+	// ~0.07s), and the parse below returns some unrelated process's cwd.
+	out, err := exec.CommandContext(ctx, "lsof", "-a", "-p", strconv.Itoa(pid), "-Fn", "-d", "cwd").Output()
 	if err != nil {
 		return ""
 	}
