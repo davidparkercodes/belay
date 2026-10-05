@@ -871,7 +871,7 @@ func IsRunning(cfg *config.Config) (bool, int) {
 	return true, pid
 }
 
-// Stop terminates the running daemon process.
+// Stop terminates the running daemon process and waits for it to exit.
 func Stop(cfg *config.Config) error {
 	running, pid := IsRunning(cfg)
 	if !running {
@@ -882,5 +882,18 @@ func Stop(cfg *config.Config) error {
 		return fmt.Errorf("terminate process %d: %w", pid, err)
 	}
 
+	return waitForExit(pid, stopTimeout)
+}
+
+var stopTimeout = 15 * time.Second
+
+func waitForExit(pid int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for isProcessAlive(pid) {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("daemon (PID %d) did not exit within %s", pid, timeout)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	return nil
 }

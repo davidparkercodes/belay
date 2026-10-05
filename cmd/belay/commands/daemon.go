@@ -149,7 +149,7 @@ func newDaemonRestartCmd(version string) *cobra.Command {
 
 			if running, _ := daemon.IsRunning(cfg); running {
 				if err := daemon.Stop(cfg); err != nil {
-					fmt.Printf("Warning: stop failed: %v\n", err)
+					return fmt.Errorf("stop existing daemon: %w", err)
 				}
 				fmt.Println("Stopped existing daemon")
 			}

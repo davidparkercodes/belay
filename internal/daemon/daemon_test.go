@@ -1343,10 +1343,14 @@ func TestStop_SendsSIGTERM(t *testing.T) {
 		t.Fatalf("start subprocess: %v", err)
 	}
 	childPID := cmd.Process.Pid
-	defer func() {
-		// Ensure cleanup even if test fails
-		_ = cmd.Process.Kill()
+	exited := make(chan struct{})
+	go func() {
 		_ = cmd.Wait()
+		close(exited)
+	}()
+	defer func() {
+		_ = cmd.Process.Kill()
+		<-exited
 	}()
 
 	// Write the child's PID to the PID file
@@ -1363,11 +1367,13 @@ func TestStop_SendsSIGTERM(t *testing.T) {
 		t.Errorf("pid = %d, want %d", pid, childPID)
 	}
 
-	// Stop should send SIGTERM and succeed
 	if err := Stop(cfg); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
 
-	// Wait for the child to exit (it should die from SIGTERM)
-	_ = cmd.Wait()
+	select {
+	case <-exited:
+	default:
+		t.Fatal("Stop returned before the process exited")
+	}
 }
