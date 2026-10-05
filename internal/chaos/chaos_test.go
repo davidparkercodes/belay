@@ -28,6 +28,7 @@ import (
 // ─── TestMain ────────────────────────────────────────────────────────────────
 
 func TestMain(m *testing.M) {
+	store.GCGracePeriod = 0
 	StartRun()
 	code := m.Run()
 

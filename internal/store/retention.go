@@ -80,6 +80,9 @@ type GCResult struct {
 	ObjectsScanned  int   `json:"objects_scanned"`
 }
 
+// GCGracePeriod is how recently written an unreferenced object may be and still be kept by GC.
+var GCGracePeriod = 10 * time.Minute
+
 // GarbageCollect removes orphaned objects not referenced by any event in the index.
 func GarbageCollect(idx *index.Index, objStore *Store, dryRun bool) (*GCResult, error) {
 	result := &GCResult{}
@@ -96,13 +99,19 @@ func GarbageCollect(idx *index.Index, objStore *Store, dryRun bool) (*GCResult, 
 
 	result.ObjectsScanned = len(hashes)
 
+	graceCutoff := time.Now().Add(-GCGracePeriod)
 	for _, hash := range hashes {
 		if !referenced[hash] {
-			result.OrphanedObjects++
-			size, sizeErr := objStore.ObjectSize(hash)
-			if sizeErr == nil {
-				result.BytesFreed += size
+			info, statErr := objStore.ObjectInfo(hash)
+			if statErr != nil {
+				continue
 			}
+			// The watcher stores an object before indexing its event, so a fresh unreferenced object may be in flight.
+			if info.ModTime().After(graceCutoff) {
+				continue
+			}
+			result.OrphanedObjects++
+			result.BytesFreed += info.Size()
 			if !dryRun {
 				if err := objStore.Delete(hash); err != nil {
 					return nil, fmt.Errorf("delete orphan %s: %w", hash[:8], err)

@@ -102,6 +102,11 @@ func (s *Store) ObjectSize(hash string) (int64, error) {
 	return info.Size(), nil
 }
 
+// ObjectInfo returns the file info of the stored object with the given hash.
+func (s *Store) ObjectInfo(hash string) (os.FileInfo, error) {
+	return os.Stat(s.objectPath(hash))
+}
+
 // Get retrieves the original content for the given hash, decompressing if needed.
 func (s *Store) Get(hash string) ([]byte, error) {
 	objPath := s.objectPath(hash)
