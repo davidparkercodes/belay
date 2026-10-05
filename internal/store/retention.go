@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/davidparkercodes/belay/internal/config"
+	"github.com/davidparkercodes/belay/internal/ignore"
 	"github.com/davidparkercodes/belay/internal/index"
 	"github.com/davidparkercodes/belay/internal/schema"
 )
@@ -131,6 +132,7 @@ type Compactor struct {
 	dryRun    bool
 	now       time.Time
 	eventsDir string
+	ignored   *ignore.Matcher
 	maxBytes  int64
 	logf      func(format string, args ...interface{})
 }
@@ -152,6 +154,12 @@ func (c *Compactor) SetEventsDir(dir string) {
 	c.eventsDir = dir
 }
 
+// SetPurgeIgnored makes the next pass first delete all history of files that the matcher
+// now ignores, so paths added to .belayignore stop pinning objects immediately.
+func (c *Compactor) SetPurgeIgnored(m *ignore.Matcher) {
+	c.ignored = m
+}
+
 // SetLogger routes compaction log lines to the given printf-style function.
 func (c *Compactor) SetLogger(logf func(format string, args ...interface{})) {
 	if logf != nil {
@@ -166,6 +174,15 @@ func (c *Compactor) RunCompaction() (*CompactionResult, error) {
 	start := time.Now()
 	result := &CompactionResult{
 		TierBreakdown: make(map[string]int),
+	}
+
+	if c.ignored != nil {
+		n, err := c.purgeIgnored()
+		if err != nil {
+			return nil, fmt.Errorf("purge ignored: %w", err)
+		}
+		result.EventsRemoved += n
+		result.TierBreakdown["ignored_purged"] = n
 	}
 
 	purged, err := c.purge()
@@ -271,6 +288,43 @@ func (c *Compactor) deleteBatch(toDelete []string, tier, verb string) (int, erro
 	}
 	c.logf("belay: compacted %d %s-tier events (%s)", deleted, tier, verb)
 	return int(deleted), nil
+}
+
+// purgeIgnored deletes every event for file paths that the ignore matcher now excludes.
+func (c *Compactor) purgeIgnored() (int, error) {
+	paths, err := c.idx.DistinctFilePaths()
+	if err != nil {
+		return 0, err
+	}
+
+	var ignoredPaths []string
+	for _, p := range paths {
+		if p == ".belay/sessions" {
+			continue
+		}
+		if c.ignored.ShouldIgnore(p) {
+			ignoredPaths = append(ignoredPaths, p)
+		}
+	}
+	if len(ignoredPaths) == 0 {
+		return 0, nil
+	}
+
+	if c.dryRun {
+		n, err := c.idx.CountEventsForPaths(ignoredPaths)
+		if err != nil {
+			return 0, err
+		}
+		c.logf("belay: [dry-run] would purge %d events across %d ignored paths", n, len(ignoredPaths))
+		return int(n), nil
+	}
+
+	n, err := c.idx.DeleteEventsForPaths(ignoredPaths)
+	if err != nil {
+		return 0, err
+	}
+	c.logf("belay: purged %d events across %d paths now matched by .belayignore", n, len(ignoredPaths))
+	return int(n), nil
 }
 
 // purge deletes all events older than the archive tier (if archive_days > 0).

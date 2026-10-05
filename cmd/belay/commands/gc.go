@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/davidparkercodes/belay/internal/config"
+	"github.com/davidparkercodes/belay/internal/ignore"
 	"github.com/davidparkercodes/belay/internal/index"
 	"github.com/davidparkercodes/belay/internal/store"
 
@@ -38,13 +39,16 @@ purged events are gone from disk too. The daemon runs this automatically
 (compaction_interval_min, default hourly, plus once shortly after startup).
 
 Use --dry-run to see what would be cleaned up without deleting anything.
-Use --gc-only to skip compaction and only garbage collect orphaned objects.`,
+Use --gc-only to skip compaction and only garbage collect orphaned objects.
+Use --purge-ignored to also delete all history of files that .belayignore now
+excludes (for example after adding a build-output or screenshots directory).`,
 		RunE: runGC,
 	}
 
 	cmd.Flags().Bool("dry-run", false, "Show what would be collected without doing it")
 	cmd.Flags().Bool("json", false, "Output as JSON")
 	cmd.Flags().Bool("gc-only", false, "Skip compaction, only garbage collect orphaned objects")
+	cmd.Flags().Bool("purge-ignored", false, "Also delete all history of files now matched by .belayignore")
 
 	return cmd
 }
@@ -53,6 +57,10 @@ func runGC(cmd *cobra.Command, args []string) error {
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	jsonOutput, _ := cmd.Flags().GetBool("json")
 	gcOnly, _ := cmd.Flags().GetBool("gc-only")
+	purgeIgnored, _ := cmd.Flags().GetBool("purge-ignored")
+	if purgeIgnored && gcOnly {
+		return fmt.Errorf("--purge-ignored runs as part of compaction and cannot be combined with --gc-only")
+	}
 
 	projectRoot, err := config.FindProjectRoot()
 	if err != nil {
@@ -89,6 +97,13 @@ func runGC(cmd *cobra.Command, args []string) error {
 
 		compactor := store.NewCompactor(idx, objStore, &cfg.Retention, dryRun)
 		compactor.SetEventsDir(cfg.EventsDir())
+		if purgeIgnored {
+			matcher, err := ignore.NewMatcher(projectRoot)
+			if err != nil {
+				return fmt.Errorf("load .belayignore: %w", err)
+			}
+			compactor.SetPurgeIgnored(matcher)
+		}
 		compResult, compErr := compactor.RunCompaction()
 		if compErr != nil {
 			return fmt.Errorf("compaction: %w", compErr)
