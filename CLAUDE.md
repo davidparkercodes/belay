@@ -1,5 +1,9 @@
 # Belay -- Developer Reference
 
+## Public repository
+
+Belay is open source. Everything here (code, comments, tests, docs, hooks, changelog) is public. Never reference a specific person's machines, hostnames, IP addresses, home paths, private projects or infrastructure. Behavior must work the same on any macOS, Linux or Windows machine; anything machine-specific belongs in the user's own environment (env vars such as `BELAY_BIN` / `BELAY_HOOK_DISABLE`, their service manager, their `.belay/config.toml`), not in this repo.
+
 ## Architecture
 
 ```
@@ -31,6 +35,8 @@ go build -o bin/belay ./cmd/belay
 go test ./... -v -race
 go vet ./...
 ```
+
+`bin/belay` is gitignored build output. After a source change, run `task build` and restart any running daemons (`belay daemon restart`) so they pick up the new binary.
 
 ## Key Design Decisions
 
