@@ -82,7 +82,9 @@ CREATE TABLE IF NOT EXISTS meta (
 
 // Open opens or creates a SQLite index database at the given path with WAL mode enabled.
 func Open(dbPath string) (*Index, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	// Per-connection pragmas must be in the DSN: a pooled Exec only configures one connection, the rest fail fast with SQLITE_BUSY.
+	dsn := dbPath + "?_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=temp_store(MEMORY)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
