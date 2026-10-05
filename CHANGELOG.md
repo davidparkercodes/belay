@@ -2,6 +2,12 @@
 
 All notable changes to Belay are documented here.
 
+## v1.7.1 - 2026-10-04
+
+### Fixed
+- **`belay daemon restart` left the old daemon running**: restart sent SIGTERM and started the new daemon immediately, before the old one had exited. The start saw the old PID still alive, printed "Daemon is already running", and the previous binary kept running, so upgrading with `restart` silently did nothing. `belay daemon stop` (and `restart` and `remove`) now wait for the daemon to exit, up to 15 seconds. If it doesn't exit in time, `restart` stops with an error instead of reporting success.
+- **Quiet projects reported "watcher may be stalled"**: health turned `degraded` after 30 minutes without a file change, which is normal for an idle project. Health now reflects only the watcher's real state. `degraded` means a real problem, such as an exhausted inotify limit.
+
 ## v1.7.0 - 2026-10-04
 
 ### Changed
