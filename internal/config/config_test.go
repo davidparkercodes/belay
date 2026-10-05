@@ -93,6 +93,9 @@ func TestDefaultConfig_RetentionDefaults(t *testing.T) {
 	if cfg.Retention.MaxStorageGB != DefaultMaxStorageGB {
 		t.Errorf("Retention.MaxStorageGB = %d, want %d", cfg.Retention.MaxStorageGB, DefaultMaxStorageGB)
 	}
+	if !cfg.Retention.CompactSegments {
+		t.Error("Retention.CompactSegments = false, want true")
+	}
 }
 
 func TestDefaultConfig_APIDefaults(t *testing.T) {
@@ -129,9 +132,9 @@ func TestConstants(t *testing.T) {
 		{"DefaultSegmentMaxBytes", int64(DefaultSegmentMaxBytes), int64(64 * 1024 * 1024)},
 		{"DefaultHotHours", DefaultHotHours, 24},
 		{"DefaultWarmDays", DefaultWarmDays, 7},
-		{"DefaultColdDays", DefaultColdDays, 30},
-		{"DefaultArchiveDays", DefaultArchiveDays, 365},
-		{"DefaultMaxStorageGB", DefaultMaxStorageGB, 10},
+		{"DefaultColdDays", DefaultColdDays, 14},
+		{"DefaultArchiveDays", DefaultArchiveDays, 14},
+		{"DefaultMaxStorageGB", DefaultMaxStorageGB, 3},
 		{"DefaultMaxFileSizeMB", DefaultMaxFileSizeMB, 50},
 	}
 
@@ -177,7 +180,7 @@ func TestPathHelpers_DifferentRoots(t *testing.T) {
 		"/",
 		"/tmp",
 		"/home/user/deeply/nested/project",
-		"/Users/david/Code/my-project",
+		"/Users/someone/Code/my-project",
 	}
 
 	for _, root := range roots {
@@ -254,9 +257,9 @@ func TestToTOML_ContainsDefaultValues(t *testing.T) {
 		{"compression_enabled", "compression_enabled = true"},
 		{"hot_hours", "hot_hours = 24"},
 		{"warm_days", "warm_days = 7"},
-		{"cold_days", "cold_days = 30"},
-		{"archive_days", "archive_days = 365"},
-		{"max_storage_gb", "max_storage_gb = 10"},
+		{"cold_days", "cold_days = 14"},
+		{"archive_days", "archive_days = 14"},
+		{"max_storage_gb", "max_storage_gb = 3"},
 		{"port", "port = 33412"},
 		{"enabled", "enabled = true"},
 		{"allow_writes", "allow_writes = false"},

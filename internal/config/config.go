@@ -33,13 +33,13 @@ const (
 	DefaultWarmDays = 7
 
 	// DefaultColdDays is the default cold tier retention in days.
-	DefaultColdDays = 30
+	DefaultColdDays = 14
 
 	// DefaultArchiveDays is the default archive tier retention in days.
-	DefaultArchiveDays = 365
+	DefaultArchiveDays = 14
 
 	// DefaultMaxStorageGB is the default storage budget in gigabytes.
-	DefaultMaxStorageGB = 10
+	DefaultMaxStorageGB = 3
 
 	// DefaultCompactionIntervalMin is how often (wall-clock minutes) the daemon runs compaction.
 	DefaultCompactionIntervalMin = 60
@@ -183,7 +183,7 @@ func DefaultConfig(projectRoot string) *Config {
 
 			CompactionIntervalMin: DefaultCompactionIntervalMin,
 			MaxVersionsPerFile:    DefaultMaxVersionsPerFile,
-			CompactSegments:       false,
+			CompactSegments:       true,
 		},
 		API: APIConfig{
 			Port:    DefaultAPIPort,
