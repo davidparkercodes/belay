@@ -6,6 +6,10 @@
 #
 # Install: Add to ~/.claude/settings.json PostToolUse hooks array
 #
+# Env:
+#   BELAY_BIN           - path to the belay binary (default: PATH, then common install dirs)
+#   BELAY_HOOK_DISABLE  - set to 1 to make this hook a no-op on this machine
+#
 # Stdin JSON fields used:
 #   tool_name       - Tool that was used (Write, Edit, NotebookEdit, Bash, etc.)
 #   tool_input      - Tool input params (file_path for Write/Edit)
@@ -19,7 +23,7 @@ set -euo pipefail
 # Read JSON payload from stdin
 PAYLOAD=$(cat)
 
-# Extract fields with python3 (available on macOS)
+# Extract fields with python3
 PARSED=$(python3 -c "
 import json, sys, os
 
@@ -61,13 +65,21 @@ SESSION_ID=$(echo "$PARSED" | sed -n '3p')
 
 [ -z "$FILE_PATH" ] && exit 0
 
+[ "${BELAY_HOOK_DISABLE:-}" = 1 ] && exit 0
+
 # Find belay binary
 BELAY_BIN="${BELAY_BIN:-}"
+if [ -z "$BELAY_BIN" ]; then
+  BELAY_BIN=$(command -v belay 2>/dev/null || true)
+fi
 if [ -z "$BELAY_BIN" ]; then
   for candidate in \
     "$(dirname "$0")/../bin/belay" \
     "$HOME/go/bin/belay" \
-    "/usr/local/bin/belay"; do
+    "$HOME/.local/bin/belay" \
+    "/usr/local/bin/belay" \
+    "/opt/homebrew/bin/belay" \
+    "/home/linuxbrew/.linuxbrew/bin/belay"; do
     if [ -x "$candidate" ]; then
       BELAY_BIN="$candidate"
       break
