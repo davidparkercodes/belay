@@ -2,6 +2,25 @@
 
 All notable changes to Belay are documented here.
 
+## v1.7.0 - 2026-10-04
+
+### Changed
+- **Short retention by default**: new projects now keep `hot_hours = 24`, `warm_days = 7`, `cold_days = 14`, `archive_days = 14` and `max_storage_gb = 3` (was cold 30, archive 365, 10 GB). A year of daily snapshots grew real repos to 9+ GB of history that nobody restores from. Existing `config.toml` files keep whatever they set explicitly; edit them to adopt the new policy. `archive_days = 0` still means keep forever.
+- **`retention.compact_segments` defaults to `true`**: sealed event-log segments are now rewritten after compaction out of the box, so purged events actually leave `.belay/events` instead of accumulating there indefinitely.
+- **Linux/Windows watcher covers large repos**: the recursive watcher no longer stops at 2,048 directories or 6 levels deep. It watches every non-ignored directory (up to 32 levels). If the kernel's inotify limit runs out, the watcher reports `degraded` with the `sysctl fs.inotify.max_user_watches` command to raise it, instead of logging a warning per directory and reporting healthy.
+- **Claude Code hook finds `belay` anywhere**: `hooks/belay-hook.sh` now resolves the binary from `PATH`, then `~/go/bin`, `~/.local/bin`, `/usr/local/bin`, `/opt/homebrew/bin` and Linuxbrew. Set `BELAY_HOOK_DISABLE=1` to turn the hook off on a machine.
+
+### Added
+- **`belay gc --purge-ignored`**: deletes all history of files that `.belayignore` now excludes, so adding a screenshots, logs or build-output directory reclaims its space immediately instead of waiting for it to age out.
+
+### Fixed
+- **`max_storage_gb` could never be met**: when over budget, compaction only collapsed the older half of the hot tier to hourly granularity, which frees almost nothing. It now evicts the oldest history in time slices (re-measuring after each) and only then shrinks the hot tier. The hot tier itself is never evicted.
+- **GC could delete an object mid-write**: the watcher stores an object before indexing its event, so a compaction pass landing between the two deleted the new version as an orphan. GC now skips unreferenced objects written in the last 10 minutes.
+- **`database is locked` during auto-compaction**: `busy_timeout` was set with a one-off `Exec` on a pooled `database/sql` handle, so only one connection waited on locks and the rest failed with `SQLITE_BUSY`. Per-connection pragmas now go in the DSN.
+- **`.belayignore` edits needed a daemon restart**: the daemon now reloads patterns when `.belayignore` changes.
+- **Linux/Windows missed files in new nested directories**: creating `a/b/c/file` in one step only watched `a`, so the file and anything later written under `b` or `c` were never recorded. New directories are now watched recursively, and files already inside them are recorded.
+- **Data race on watcher shutdown**: `Stop()` cleared the fsnotify handle while the event goroutine could still read it.
+
 ## v1.6.1 - 2026-09-12
 
 ### Fixed
@@ -70,7 +89,7 @@ All notable changes to Belay are documented here.
 - README updated with badges, aligned with website messaging
 
 ### Fixed
-- Leaked *.ts.net reference removed from CORS docs
+- Private hostname reference removed from CORS docs
 - dist/.gitkeep tracked so go:embed works in CI
 - All golangci-lint errors resolved
 

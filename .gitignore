@@ -26,3 +26,6 @@ coverage.txt
 coverage.out
 coverage.html
 *.cover
+
+# Taskfile cache
+.task/
