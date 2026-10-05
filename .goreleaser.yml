@@ -38,6 +38,20 @@ archives:
     format_overrides:
       - goos: windows
         formats: ["zip"]
+notarize:
+  macos:
+    - enabled: '{{ if index .Env "MACOS_SIGN_P12" }}true{{ else }}false{{ end }}'
+      ids:
+        - darwin
+      sign:
+        certificate: "{{ .Env.MACOS_SIGN_P12 }}"
+        password: "{{ .Env.MACOS_SIGN_PASSWORD }}"
+      notarize:
+        issuer_id: "{{ .Env.MACOS_NOTARY_ISSUER_ID }}"
+        key_id: "{{ .Env.MACOS_NOTARY_KEY_ID }}"
+        key: "{{ .Env.MACOS_NOTARY_KEY }}"
+        wait: true
+        timeout: 20m
 checksum:
   name_template: 'checksums.txt'
 homebrew_casks:
@@ -50,6 +64,12 @@ homebrew_casks:
     directory: Casks
     binaries:
       - belay
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/belay"]
+          end
 changelog:
   sort: asc
   filters:
