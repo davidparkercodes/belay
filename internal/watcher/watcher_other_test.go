@@ -91,7 +91,7 @@ func TestWatcher_WatchesDeepTrees(t *testing.T) {
 	if err := w.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer w.Stop()
+	defer func() { _ = w.Stop() }()
 
 	rel, _ := filepath.Rel(root, deep)
 	for _, d := range w.WatchedDirs() {
