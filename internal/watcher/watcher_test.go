@@ -248,6 +248,40 @@ func TestShouldIgnoreRel_CustomIgnoreFile(t *testing.T) {
 	}
 }
 
+func TestShouldIgnoreRel_ReloadsOnBelayignoreChange(t *testing.T) {
+	projectRoot := t.TempDir()
+	ignorePath := filepath.Join(projectRoot, ".belayignore")
+	if err := os.WriteFile(ignorePath, []byte("*.log\n"), 0644); err != nil {
+		t.Fatalf("write .belayignore: %v", err)
+	}
+	objectsDir := filepath.Join(projectRoot, ".belay", "objects")
+	if err := os.MkdirAll(objectsDir, 0755); err != nil {
+		t.Fatalf("create objects dir: %v", err)
+	}
+	objStore, err := store.NewStore(objectsDir, false)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	t.Cleanup(func() { objStore.Close() })
+	matcher, err := ignore.NewMatcher(projectRoot)
+	if err != nil {
+		t.Fatalf("NewMatcher: %v", err)
+	}
+	base := &watcherBase{}
+	initBase(base, config.DefaultConfig(projectRoot), objStore, matcher)
+
+	if base.shouldIgnoreRel("screenshots/a.png") {
+		t.Fatal("screenshots/a.png should be tracked before the ignore edit")
+	}
+	if err := os.WriteFile(ignorePath, []byte("*.log\nscreenshots/\n"), 0644); err != nil {
+		t.Fatalf("rewrite .belayignore: %v", err)
+	}
+	base.shouldIgnoreRel(".belayignore")
+	if !base.shouldIgnoreRel("screenshots/a.png") {
+		t.Error("an edit to .belayignore should take effect without a daemon restart")
+	}
+}
+
 // ─── OnEvent() ───────────────────────────────────────────────────────────────
 
 func TestOnEvent_RegistersHandler(t *testing.T) {

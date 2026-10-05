@@ -3,10 +3,13 @@
 package watcher
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/davidparkercodes/belay/internal/config"
@@ -46,53 +49,17 @@ func (w *Watcher) Start() error {
 		w.fsw = fsw
 	}
 
-	const maxWatchDirs = 2048
-
-	watchCount := 0
-	err := filepath.Walk(w.cfg.ProjectRoot, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-
-		if !info.IsDir() {
-			return nil
-		}
-
-		relPath, err := filepath.Rel(w.cfg.ProjectRoot, path)
-		if err != nil {
-			return nil
-		}
-
-		if relPath != "." && isHidden(relPath) {
-			return filepath.SkipDir
-		}
-
-		if relPath != "." && w.matcher.ShouldIgnore(relPath+"/") {
-			return filepath.SkipDir
-		}
-
-		depth := strings.Count(relPath, string(filepath.Separator))
-		if relPath != "." && depth > 6 {
-			return filepath.SkipDir
-		}
-
-		if watchCount >= maxWatchDirs {
-			return filepath.SkipDir
-		}
-
-		if err := w.fsw.Add(path); err != nil {
-			w.logger.Printf("warning: cannot watch %s: %v", path, err)
-			return nil
-		}
-		watchCount++
-		return nil
-	})
+	watchCount, exhausted, err := w.addTree(w.cfg.ProjectRoot, false)
 	if err != nil {
 		w.health.setError(StatusError, err.Error())
 		return fmt.Errorf("walk project root: %w", err)
 	}
 
-	w.health.setStatus(StatusRunning)
+	if exhausted {
+		w.health.setError(StatusDegraded, inotifyLimitMsg)
+	} else {
+		w.health.setStatus(StatusRunning)
+	}
 	w.logger.Printf("watching %d directories via fsnotify", watchCount)
 
 	w.ticker = time.NewTicker(w.debounceMs)
@@ -117,8 +84,8 @@ func (w *Watcher) Stop() error {
 	close(w.done)
 	w.ticker.Stop()
 	w.fsw.Close()
-	w.fsw = nil
 	w.wg.Wait()
+	w.fsw = nil
 	w.flushPending()
 	return nil
 }
@@ -170,7 +137,9 @@ func (w *Watcher) handleRawEvent(event fsnotify.Event) {
 	if event.Has(fsnotify.Create) {
 		if info, err := os.Stat(path); err == nil && info.IsDir() {
 			if !w.matcher.ShouldIgnore(relPath + "/") {
-				_ = w.fsw.Add(path)
+				if _, exhausted, _ := w.addTree(path, true); exhausted {
+					w.health.setError(StatusDegraded, inotifyLimitMsg)
+				}
 			}
 			return
 		}
@@ -186,6 +155,57 @@ func (w *Watcher) handleRawEvent(event fsnotify.Event) {
 	}
 
 	w.queueEvent(relPath, op)
+}
+
+const inotifyLimitMsg = "inotify watch limit reached; some directories are not watched. Raise it with: sudo sysctl fs.inotify.max_user_watches=524288"
+
+const maxWatchDepth = 32
+
+// addTree watches root and every non-ignored directory below it. When queueFiles is
+// set, files already present are recorded as creates, since they may have been written
+// before the watch on their directory existed. exhausted reports an inotify limit hit.
+func (w *Watcher) addTree(root string, queueFiles bool) (count int, exhausted bool, err error) {
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		relPath, relErr := filepath.Rel(w.cfg.ProjectRoot, path)
+		if relErr != nil {
+			return nil
+		}
+
+		if !d.IsDir() {
+			if queueFiles && d.Type().IsRegular() && !w.shouldIgnoreRel(relPath) {
+				w.queueEvent(relPath, schema.OpCreate)
+			}
+			return nil
+		}
+
+		if relPath != "." {
+			if isHidden(relPath) || w.matcher.ShouldIgnore(relPath+"/") {
+				return filepath.SkipDir
+			}
+			if strings.Count(relPath, string(filepath.Separator)) >= maxWatchDepth {
+				return filepath.SkipDir
+			}
+		}
+
+		if exhausted {
+			return filepath.SkipDir
+		}
+		if addErr := w.fsw.Add(path); addErr != nil {
+			if errors.Is(addErr, syscall.ENOSPC) {
+				exhausted = true
+				w.logger.Printf("warning: %s (stopped at %s)", inotifyLimitMsg, relPath)
+				return filepath.SkipDir
+			}
+			w.logger.Printf("warning: cannot watch %s: %v", path, addErr)
+			return nil
+		}
+		count++
+		return nil
+	})
+	return count, exhausted, err
 }
 
 func mapFsnotifyOp(op fsnotify.Op) schema.Operation {

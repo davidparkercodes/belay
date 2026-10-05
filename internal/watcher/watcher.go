@@ -273,6 +273,11 @@ func (b *watcherBase) captureContent(absPath string, event *schema.Event) error 
 }
 
 func (b *watcherBase) shouldIgnoreRel(relPath string) bool {
+	if filepath.ToSlash(relPath) == ".belayignore" {
+		if err := b.matcher.Reload(); err != nil {
+			log.Printf("belay: reload .belayignore: %v", err)
+		}
+	}
 	if b.cfg.Watcher.ExcludeHidden && isHidden(relPath) {
 		return true
 	}
