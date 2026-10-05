@@ -2,6 +2,11 @@
 
 All notable changes to Belay are documented here.
 
+## v1.7.2 - 2026-10-05
+
+### Fixed
+- **macOS blocked the Homebrew install**: since v1.6.0 Belay ships as a Homebrew cask instead of a formula. Homebrew quarantines cask downloads, and macOS refused to run the unsigned binary ("cannot be opened because Apple cannot check it for malicious software"). The cask now clears the quarantine flag on install, so `brew install davidparkercodes/tap/belay` works again. Release builds for macOS are also set up to be signed and notarized once signing credentials are configured.
+
 ## v1.7.1 - 2026-10-04
 
 ### Fixed
