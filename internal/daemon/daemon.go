@@ -628,9 +628,8 @@ func formatBytes(b int64) string {
 
 func (d *Daemon) WatcherHealth() map[string]interface{} {
 	h := d.watcher.Health()
-	status, errMsg := d.evaluateWatcherHealth(h)
 	result := map[string]interface{}{
-		"status": string(status),
+		"status": string(h.Status),
 	}
 	if h.LastEventAt != nil {
 		result["last_event_at"] = h.LastEventAt.Format(time.RFC3339Nano)
@@ -638,42 +637,17 @@ func (d *Daemon) WatcherHealth() map[string]interface{} {
 	if h.StartedAt != nil {
 		result["started_at"] = h.StartedAt.Format(time.RFC3339Nano)
 	}
-	if errMsg != "" {
-		result["error"] = errMsg
-	} else if h.Error != "" {
+	if h.Error != "" {
 		result["error"] = h.Error
 	}
 	return result
 }
 
 func (d *Daemon) OverallStatus() string {
-	h := d.watcher.Health()
-	status, _ := d.evaluateWatcherHealth(h)
-	if status == watcher.StatusRunning {
+	if d.watcher.Health().Status == watcher.StatusRunning {
 		return "ok"
 	}
 	return "degraded"
-}
-
-func (d *Daemon) evaluateWatcherHealth(h watcher.WatcherHealth) (watcher.WatcherStatus, string) {
-	if h.Status != watcher.StatusRunning {
-		return h.Status, h.Error
-	}
-
-	now := time.Now()
-
-	if h.LastEventAt != nil {
-		if now.Sub(*h.LastEventAt) > watcher.StaleEventThreshold {
-			return watcher.StatusDegraded, "no file events detected in over 30 minutes - watcher may be stalled"
-		}
-		return watcher.StatusRunning, ""
-	}
-
-	if h.StartedAt != nil && now.Sub(*h.StartedAt) > watcher.StaleEventThreshold {
-		return watcher.StatusDegraded, "no file events detected since startup over 30 minutes ago - watcher may be stalled"
-	}
-
-	return watcher.StatusRunning, ""
 }
 
 func (d *Daemon) runWatchdog() {

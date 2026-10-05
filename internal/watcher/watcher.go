@@ -24,8 +24,6 @@ const (
 	StatusStopped  WatcherStatus = "stopped"
 	StatusError    WatcherStatus = "error"
 	StatusDegraded WatcherStatus = "degraded"
-
-	StaleEventThreshold = 30 * time.Minute
 )
 
 type WatcherHealth struct {
