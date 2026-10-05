@@ -131,6 +131,7 @@ type Compactor struct {
 	dryRun    bool
 	now       time.Time
 	eventsDir string
+	maxBytes  int64
 	logf      func(format string, args ...interface{})
 }
 
@@ -452,14 +453,22 @@ func (c *Compactor) enforceMaxVersions() (int, error) {
 	return c.deleteBatch(toDelete, "version-cap", fmt.Sprintf("max %d versions per file", limit))
 }
 
-// enforceStorageLimit checks total storage usage and applies increasingly aggressive
-// compaction if the max_storage_gb limit is exceeded.
-func (c *Compactor) enforceStorageLimit() (int, int, int64, error) {
-	if c.retention.MaxStorageGB <= 0 {
-		return 0, 0, 0, nil
-	}
+// storageEvictionSlices is how many equal time slices of pre-hot history the storage
+// limit may evict, oldest first, in one pass.
+const storageEvictionSlices = 8
 
-	maxBytes := int64(c.retention.MaxStorageGB) * 1024 * 1024 * 1024
+// enforceStorageLimit brings the object store back under max_storage_gb. It evicts whole
+// slices of the oldest history first (everything before a cutoff, re-measuring after each
+// slice), and only if the store is still over budget once the pre-hot history is gone does
+// it collapse the older half of the hot tier to hourly granularity.
+func (c *Compactor) enforceStorageLimit() (int, int, int64, error) {
+	maxBytes := c.maxBytes
+	if maxBytes <= 0 {
+		if c.retention.MaxStorageGB <= 0 {
+			return 0, 0, 0, nil
+		}
+		maxBytes = int64(c.retention.MaxStorageGB) * 1024 * 1024 * 1024
+	}
 
 	totalBytes, _, err := c.objStore.Size()
 	if err != nil {
@@ -470,11 +479,19 @@ func (c *Compactor) enforceStorageLimit() (int, int, int64, error) {
 		return 0, 0, 0, nil
 	}
 
-	overageBytes := totalBytes - maxBytes
 	c.logf("belay: storage %.2f GB exceeds limit %.2f GB (over by %.2f MB)",
 		float64(totalBytes)/(1024*1024*1024),
 		float64(maxBytes)/(1024*1024*1024),
-		float64(overageBytes)/(1024*1024))
+		float64(totalBytes-maxBytes)/(1024*1024))
+
+	removed, objects, freed, err := c.evictOldest(totalBytes, maxBytes)
+	if err != nil {
+		return removed, objects, freed, err
+	}
+	totalBytes -= freed
+	if c.dryRun || totalBytes <= maxBytes {
+		return removed, objects, freed, nil
+	}
 
 	shrunkHotHours := c.retention.HotHours / 2
 	if shrunkHotHours < 1 {
@@ -490,7 +507,7 @@ func (c *Compactor) enforceStorageLimit() (int, int, int64, error) {
 		OrderDesc: false,
 	})
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("query aggressive warm events: %w", err)
+		return removed, objects, freed, fmt.Errorf("query aggressive warm events: %w", err)
 	}
 
 	var aggressiveDelete []string
@@ -498,19 +515,78 @@ func (c *Compactor) enforceStorageLimit() (int, int, int64, error) {
 		aggressiveDelete = append(aggressiveDelete, hourlyCollapse(fsEvents)...)
 	}
 	if len(aggressiveDelete) == 0 {
-		return 0, 0, 0, nil
+		return removed, objects, freed, nil
 	}
 
-	removed, err := c.deleteBatch(aggressiveDelete, "storage-limit", "hot tier shrunk to half")
+	collapsed, err := c.deleteBatch(aggressiveDelete, "storage-limit", "hot tier shrunk to half")
 	if err != nil {
-		return 0, 0, 0, err
+		return removed, objects, freed, err
 	}
 
 	gcResult, err := GarbageCollect(c.idx, c.objStore, c.dryRun)
 	if err != nil {
-		return removed, 0, 0, err
+		return removed + collapsed, objects, freed, err
 	}
-	return removed, gcResult.OrphanedObjects, gcResult.BytesFreed, nil
+	return removed + collapsed, objects + gcResult.OrphanedObjects, freed + gcResult.BytesFreed, nil
+}
+
+// evictOldest deletes the oldest history in equal time slices, never touching the hot tier,
+// until the store fits in maxBytes or no pre-hot history remains.
+func (c *Compactor) evictOldest(totalBytes, maxBytes int64) (int, int, int64, error) {
+	hotCutoff := c.now.Add(-time.Duration(c.retention.HotHours) * time.Hour).UnixNano()
+
+	oldest, ok, err := c.idx.OldestEventTimestamp()
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	if !ok || oldest >= hotCutoff {
+		return 0, 0, 0, nil
+	}
+
+	slice := (hotCutoff - oldest) / storageEvictionSlices
+	if slice < int64(time.Hour) {
+		slice = int64(time.Hour)
+	}
+
+	var removed, objects int
+	var freed int64
+	for cutoff := oldest + slice; totalBytes > maxBytes; cutoff += slice {
+		if cutoff > hotCutoff {
+			cutoff = hotCutoff
+		}
+
+		if c.dryRun {
+			n, err := c.idx.CountEventsBefore(cutoff)
+			if err != nil {
+				return removed, objects, freed, err
+			}
+			c.logf("belay: [dry-run] storage limit would evict %d events older than %s",
+				n, time.Unix(0, cutoff).Format(time.RFC3339))
+			return int(n), 0, 0, nil
+		}
+
+		n, err := c.idx.DeleteEventsBefore(cutoff)
+		if err != nil {
+			return removed, objects, freed, err
+		}
+		removed += int(n)
+
+		gcResult, err := GarbageCollect(c.idx, c.objStore, false)
+		if err != nil {
+			return removed, objects, freed, err
+		}
+		objects += gcResult.OrphanedObjects
+		freed += gcResult.BytesFreed
+		totalBytes -= gcResult.BytesFreed
+
+		c.logf("belay: storage limit evicted %d events older than %s (%.1f MB freed)",
+			n, time.Unix(0, cutoff).Format(time.RFC3339), float64(gcResult.BytesFreed)/(1024*1024))
+
+		if cutoff >= hotCutoff {
+			break
+		}
+	}
+	return removed, objects, freed, nil
 }
 
 // groupByFile organizes compactable events into a map keyed by file path.

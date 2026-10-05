@@ -738,6 +738,88 @@ func (idx *Index) DeleteEventsBefore(cutoffNano int64) (int64, error) {
 	return result.RowsAffected()
 }
 
+// OldestEventTimestamp returns the timestamp of the oldest indexed event; ok is false when the index is empty.
+func (idx *Index) OldestEventTimestamp() (ts int64, ok bool, err error) {
+	var v sql.NullInt64
+	if err := idx.db.QueryRow("SELECT MIN(timestamp_nano) FROM events").Scan(&v); err != nil {
+		return 0, false, fmt.Errorf("query oldest event: %w", err)
+	}
+	return v.Int64, v.Valid, nil
+}
+
+// DistinctFilePaths returns every non-empty file path that has at least one indexed event.
+func (idx *Index) DistinctFilePaths() ([]string, error) {
+	rows, err := idx.db.Query("SELECT DISTINCT file_path FROM events WHERE file_path != ''")
+	if err != nil {
+		return nil, fmt.Errorf("query file paths: %w", err)
+	}
+	defer rows.Close()
+
+	var paths []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, fmt.Errorf("scan file path: %w", err)
+		}
+		paths = append(paths, p)
+	}
+	return paths, rows.Err()
+}
+
+// DeleteEventsForPaths removes every event whose file path is in paths, in one transaction.
+func (idx *Index) DeleteEventsForPaths(paths []string) (int64, error) {
+	if len(paths) == 0 {
+		return 0, nil
+	}
+	tx, err := idx.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	stmt, err := tx.Prepare("DELETE FROM events WHERE file_path = ?")
+	if err != nil {
+		return 0, fmt.Errorf("prepare statement: %w", err)
+	}
+	defer stmt.Close()
+
+	var total int64
+	for _, p := range paths {
+		result, err := stmt.Exec(p)
+		if err != nil {
+			return total, fmt.Errorf("delete events for %s: %w", p, err)
+		}
+		n, _ := result.RowsAffected()
+		total += n
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit transaction: %w", err)
+	}
+	return total, nil
+}
+
+// CountEventsForPaths returns how many events belong to the given file paths.
+func (idx *Index) CountEventsForPaths(paths []string) (int64, error) {
+	var total int64
+	for _, p := range paths {
+		var n int64
+		if err := idx.db.QueryRow("SELECT COUNT(*) FROM events WHERE file_path = ?", p).Scan(&n); err != nil {
+			return total, fmt.Errorf("count events for %s: %w", p, err)
+		}
+		total += n
+	}
+	return total, nil
+}
+
+// CountEventsBefore returns how many events are older than the given cutoff.
+func (idx *Index) CountEventsBefore(cutoffNano int64) (int64, error) {
+	var n int64
+	if err := idx.db.QueryRow("SELECT COUNT(*) FROM events WHERE timestamp_nano < ?", cutoffNano).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count events before cutoff: %w", err)
+	}
+	return n, nil
+}
+
 // ActiveContentHashes returns the set of all content hashes referenced by events in the index.
 func (idx *Index) ActiveContentHashes() (map[string]bool, error) {
 	rows, err := idx.db.Query(`
