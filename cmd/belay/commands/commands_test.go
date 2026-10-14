@@ -596,6 +596,7 @@ func TestAllCommandsHaveRunEOrSubcommands(t *testing.T) {
 		"daemon":    true,
 		"hook":      true,
 		"git-hooks": true,
+		"service":   true,
 	}
 
 	for _, sub := range root.Commands() {

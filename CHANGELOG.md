@@ -2,6 +2,22 @@
 
 All notable changes to Belay are documented here.
 
+## v1.8.0 - 2026-10-13
+
+### Added
+- **`belay service install|uninstall|status`** -- runs the project's daemon as a user LaunchAgent (macOS) or `systemd --user` unit (Linux), so it starts at login and restarts after a crash. Before this, only an interactive shell's hook started a daemon, so after a reboot a repo used only by AI agents (whose shells are non-interactive) could go unrecorded for days.
+- **`belay status --scan <dir>`** -- health-checks every Belay project under a directory and exits 1 if any daemon is stopped or has no API. `belay status` now also shows the API port and whether it answers, plus any queued events.
+- **`belay record` starts a stopped daemon** -- when the daemon is unreachable, `record` (used by the Claude Code hook) now starts it, guarded by the same `.belay/daemon.lock` the shell hook uses. Set `BELAY_NO_AUTOSTART=1` to opt out. `belay checkpoint` does the same and retries once.
+
+### Changed
+- **Each daemon gets a reachable API port** -- if `[api] port` is taken (every project defaulted to 33412), the daemon now binds a free port instead of running with no API. The bound port is written to `.belay/daemon.port`, and the CLI, Claude Code hooks and git hooks read it.
+- **Unreachable-daemon events are queued, not written into the event log** -- `belay record` used to append directly to `.belay/events` when the daemon was down, which raced the daemon's own writer and was never indexed, so the event and its session attribution were invisible. Events now go to `.belay/spool/`, and the daemon indexes them at startup and every 2 seconds.
+- **`belay record` paths are relative to the current directory** -- they used to be treated as relative to the project root, so recording `a.ts` from `web/` recorded the root `a.ts` instead of `web/a.ts`. Absolute paths are recorded in the project that contains the file, wherever the command runs. The Claude Code hook now passes absolute paths.
+
+### Fixed
+- **Edits and checkpoints recorded in another project's history** -- with several projects on the default port, the first daemon to bind 33412 accepted every other project's `record` and `checkpoint` calls. An agent edit to `src/routes.ts` in one repo was stored in another repo under a phantom session, with the other repo's file content, and `record` exited 0. Requests now carry `X-Belay-Project`, and a daemon for a different project answers 409 `project_mismatch`, so the event is queued for the right project instead.
+- **Git hooks never recorded anything** -- the installed hooks probed `/health`, which does not exist (the endpoint is `/api/health`), so every checkout, merge and rewrite was silently skipped. They also ignored the configured port. Re-run `belay git-hooks install` in each repo to pick up the fixed hooks.
+
 ## v1.7.2 - 2026-10-05
 
 ### Fixed

@@ -1,17 +1,16 @@
 package commands
 
 import (
-	"bytes"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/davidparkercodes/belay/internal/apiclient"
 	"github.com/davidparkercodes/belay/internal/config"
-	"github.com/davidparkercodes/belay/internal/eventlog"
 	"github.com/davidparkercodes/belay/internal/schema"
+	"github.com/davidparkercodes/belay/internal/spool"
 	"github.com/davidparkercodes/belay/internal/store"
 
 	"github.com/spf13/cobra"
@@ -27,9 +26,12 @@ This command is designed to be called from CI/CD hooks or AI tool hooks
 (e.g. Claude Code PostToolUse). It notifies Belay that a file was
 written so the change can be captured with hook-based attribution.
 
+The path may be absolute or relative to the current directory; the event
+is recorded in the Belay project that contains the file.
+
 If the daemon API is reachable, the event is sent via POST /api/record.
-If the daemon is not running, the event is written directly to the
-event log as a fallback.`,
+Otherwise the event is queued in .belay/spool/, the daemon is started
+(set BELAY_NO_AUTOSTART=1 to disable), and the daemon indexes the queue.`,
 		Args: cobra.ExactArgs(1),
 		RunE: runRecord,
 	}
@@ -49,14 +51,18 @@ type recordRequest struct {
 }
 
 func runRecord(cmd *cobra.Command, args []string) error {
-	filePath := args[0]
 	operation, _ := cmd.Flags().GetString("operation")
 	sessionID, _ := cmd.Flags().GetString("session")
 	toolName, _ := cmd.Flags().GetString("tool")
 
-	projectRoot, err := config.FindProjectRoot()
+	absPath, err := filepath.Abs(args[0])
 	if err != nil {
-		return fmt.Errorf("not a belay project: %w", err)
+		return fmt.Errorf("resolve path: %w", err)
+	}
+
+	projectRoot, err := config.FindProjectRootFrom(filepath.Dir(absPath))
+	if err != nil {
+		return fmt.Errorf("%s is not inside a belay project: %w", absPath, err)
 	}
 
 	cfg, err := config.Load(projectRoot)
@@ -64,17 +70,9 @@ func runRecord(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	if filepath.IsAbs(filePath) {
-		rel, err := filepath.Rel(projectRoot, filePath)
-		if err != nil {
-			return fmt.Errorf("cannot make path relative: %w", err)
-		}
-		filePath = rel
-	}
-
-	port := cfg.API.Port
-	if port == 0 {
-		port = 33412
+	filePath, err := filepath.Rel(projectRoot, absPath)
+	if err != nil {
+		return fmt.Errorf("cannot make path relative: %w", err)
 	}
 
 	req := recordRequest{
@@ -84,35 +82,30 @@ func runRecord(cmd *cobra.Command, args []string) error {
 		ToolName:  toolName,
 	}
 
-	if err := recordViaAPI(port, &req); err == nil {
+	client := apiclient.New(cfg, 2*time.Second)
+	err = client.PostJSON("/api/record", &req, nil)
+	if err == nil {
 		return nil
 	}
 
-	fmt.Fprintf(os.Stderr, "belay: daemon not reachable, writing directly to event log (event will not be indexed until daemon restarts)\n")
-	return recordDirect(cfg, filePath, operation, sessionID, toolName)
-}
-
-func recordViaAPI(port int, req *recordRequest) error {
-	body, err := json.Marshal(req)
-	if err != nil {
+	var mismatch *apiclient.MismatchError
+	if !errors.As(err, &mismatch) && !apiclient.IsUnreachable(err) {
 		return err
 	}
 
-	url := fmt.Sprintf("http://127.0.0.1:%d/api/record", port)
-	client := &http.Client{Timeout: 2 * time.Second}
-
-	resp, err := client.Post(url, "application/json", bytes.NewReader(body))
-	if err != nil {
+	if err := recordDirect(cfg, filePath, operation, sessionID, toolName); err != nil {
 		return err
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		var errResp map[string]string
-		_ = json.NewDecoder(resp.Body).Decode(&errResp)
-		return fmt.Errorf("API error %d: %s", resp.StatusCode, errResp["error"])
+	reason := "daemon not reachable"
+	if mismatch != nil {
+		reason = mismatch.Error()
 	}
-
+	if autoStartDaemon(cfg) {
+		fmt.Fprintf(os.Stderr, "belay: %s; event queued and daemon started for %s\n", reason, projectRoot)
+	} else {
+		fmt.Fprintf(os.Stderr, "belay: %s; event queued in %s until the daemon runs\n", reason, cfg.SpoolDir())
+	}
 	return nil
 }
 
@@ -163,14 +156,8 @@ func recordDirect(cfg *config.Config, filePath, operation, sessionID, toolName s
 		event.ContentSize = size
 	}
 
-	logWriter, err := eventlog.NewWriter(cfg.EventsDir(), cfg.Storage.SegmentMaxBytes)
-	if err != nil {
-		return fmt.Errorf("open event log: %w", err)
-	}
-	defer logWriter.Close()
-
-	if err := logWriter.Append(event); err != nil {
-		return fmt.Errorf("write event: %w", err)
+	if err := spool.Write(cfg.SpoolDir(), event); err != nil {
+		return fmt.Errorf("queue event: %w", err)
 	}
 
 	return nil

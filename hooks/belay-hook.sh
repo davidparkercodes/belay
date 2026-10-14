@@ -45,9 +45,8 @@ if not fp:
 sid = p.get('session_id', '')
 cwd = p.get('cwd', '')
 
-# Make path relative to cwd if absolute
-if fp.startswith('/') and cwd and fp.startswith(cwd):
-    fp = os.path.relpath(fp, cwd)
+if not os.path.isabs(fp) and cwd:
+    fp = os.path.join(cwd, fp)
 
 # Determine operation
 if tool == 'Write':

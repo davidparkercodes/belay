@@ -1,14 +1,13 @@
 package commands
 
 import (
-	"bytes"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/davidparkercodes/belay/internal/apiclient"
 	"github.com/davidparkercodes/belay/internal/config"
 
 	"github.com/spf13/cobra"
@@ -70,11 +69,6 @@ func runCheckpoint(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	port := cfg.API.Port
-	if port == 0 {
-		port = 33412
-	}
-
 	req := checkpointRequest{
 		Label:     strings.TrimSpace(label),
 		Reason:    strings.TrimSpace(reason),
@@ -82,29 +76,25 @@ func runCheckpoint(cmd *cobra.Command, args []string) error {
 		ToolName:  toolName,
 	}
 
-	body, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("marshal request: %w", err)
-	}
-
-	url := fmt.Sprintf("http://127.0.0.1:%d/api/checkpoint", port)
-	client := &http.Client{Timeout: 2 * time.Second}
-
-	resp, err := client.Post(url, "application/json", bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("daemon not reachable on port %d (start it with `belay daemon`): %w", port, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		var errResp map[string]string
-		_ = json.NewDecoder(resp.Body).Decode(&errResp)
-		return fmt.Errorf("API error %d: %s", resp.StatusCode, errResp["error"])
-	}
-
 	var out checkpointResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return fmt.Errorf("decode response: %w", err)
+	err = apiclient.New(cfg, 2*time.Second).PostJSON("/api/checkpoint", &req, &out)
+	if err != nil {
+		var mismatch *apiclient.MismatchError
+		if !errors.As(err, &mismatch) && !apiclient.IsUnreachable(err) {
+			return err
+		}
+		if !autoStartDaemon(cfg) {
+			if mismatch != nil {
+				return fmt.Errorf("%w; restart this project's daemon with `belay daemon restart`", mismatch)
+			}
+			return fmt.Errorf("daemon not reachable (start it with `belay daemon start`): %w", err)
+		}
+		if err := waitForAPI(cfg, autoStartWait); err != nil {
+			return fmt.Errorf("daemon started but API not ready: %w", err)
+		}
+		if err := apiclient.New(cfg, 2*time.Second).PostJSON("/api/checkpoint", &req, &out); err != nil {
+			return err
+		}
 	}
 
 	if quiet {

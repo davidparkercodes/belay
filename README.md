@@ -140,10 +140,13 @@ belay checkpoint --label "before refactor" --reason "about to move 30 files"
 For AI tools that don't support hooks, or custom integrations, push change events directly via the REST API:
 
 ```bash
-curl -X POST http://localhost:33412/api/record \
+curl -X POST "http://127.0.0.1:$(cat .belay/daemon.port)/api/record" \
   -H "Content-Type: application/json" \
+  -H "X-Belay-Project: $(pwd -P)" \
   -d '{"file_path": "src/main.go", "operation": "modify", "tool_name": "my-tool", "session_id": "abc123"}'
 ```
+
+Or let the CLI find the right daemon for you: `belay record <path> --session <id> --tool <name>`. It accepts absolute paths or paths relative to the current directory, records into the project that contains the file, and if the daemon is down it queues the event in `.belay/spool/` and starts the daemon (set `BELAY_NO_AUTOSTART=1` to disable).
 
 ## CLI Reference
 
@@ -153,7 +156,9 @@ curl -X POST http://localhost:33412/api/record \
 | `belay remove` | Remove Belay from the current directory (opposite of init) |
 | `belay daemon start` | Start the background watcher daemon |
 | `belay daemon stop` | Stop the daemon |
-| `belay status` | System and session overview |
+| `belay service install` | Run the daemon under launchd (macOS) or systemd (Linux) so it survives reboots |
+| `belay status` | System, daemon and API overview |
+| `belay status --scan <dir>` | Health-check every Belay project under a directory (exits 1 if any is down) |
 | `belay log` | Browse event history with filters |
 | `belay grep` | Find events that added or removed a string (pickaxe, like `git log -S`) |
 | `belay diff` | View changes between time points or sessions |
@@ -170,7 +175,9 @@ curl -X POST http://localhost:33412/api/record \
 
 ## API Endpoints
 
-All endpoints served on `:33412` when the daemon is running.
+Each project's daemon serves its own API. It binds `[api] port` (default 33412) and, if that port is already taken by another project's daemon or any other program, falls back to a free port. The bound port is written to `.belay/daemon.port`; clients should read it rather than assume 33412.
+
+Requests may send `X-Belay-Project: <absolute project root>`. A daemon that serves a different project answers `409` with `"code": "project_mismatch"` instead of recording the event in the wrong history. The CLI, Claude Code hooks and git hooks always send it.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -213,7 +220,7 @@ max_versions_per_file = 25     # cap MODIFY versions per file beyond hot (0 = un
 compact_segments = true        # rewrite sealed event-log segments so purged events leave disk
 
 [api]
-port = 33412
+port = 33412          # preferred port; falls back to a free one if taken (see .belay/daemon.port)
 host = "127.0.0.1"
 
 [safety]
@@ -221,6 +228,21 @@ allow_writes = false  # dry-run mode until you're ready
 ```
 
 All settings have sensible defaults. `belay init` generates a config with defaults. `safety.allow_writes` defaults to false so destructive commands (restore, replay, commit) show what they'd do without writing. Set to `true` once you trust the setup.
+
+## Running as a service
+
+`belay service` keeps the daemon for the current project running under your OS service manager, so it starts at login and restarts after a crash. It uses a user LaunchAgent on macOS and a `systemd --user` unit on Linux.
+
+```bash
+belay service install            # write the unit, stop any running daemon, load it
+belay service install --dry-run  # print the unit file and target path only
+belay service status             # installed?, unit path, loaded/active state
+belay service uninstall          # unload and remove (safe to run twice)
+```
+
+Each project gets its own unit, named from the repo folder plus a short hash of its path. The unit runs `belay daemon start --foreground` using the stable `belay` on your PATH when that is the same binary, so package upgrades keep working. Set `BELAY_BIN` to override it. On Linux, run `loginctl enable-linger $USER` so the service starts at boot without a login.
+
+Without a service, the daemon is started by the shell hook (interactive shells only) or by `belay record` when an AI tool writes a file. Use `belay status --scan ~/code` to spot projects with no running daemon.
 
 ## Platform Support
 

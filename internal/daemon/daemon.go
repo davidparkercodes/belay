@@ -20,6 +20,7 @@ import (
 	"github.com/davidparkercodes/belay/internal/index"
 	"github.com/davidparkercodes/belay/internal/schema"
 	"github.com/davidparkercodes/belay/internal/session"
+	"github.com/davidparkercodes/belay/internal/spool"
 	"github.com/davidparkercodes/belay/internal/store"
 	"github.com/davidparkercodes/belay/internal/watcher"
 )
@@ -45,6 +46,8 @@ type Daemon struct {
 	cleanupDone     chan struct{}
 	stopCompaction  chan struct{}
 	compactionDone  chan struct{}
+	stopSpool       chan struct{}
+	spoolDone       chan struct{}
 	stopWatchdog    chan struct{}
 	watchdogDone    chan struct{}
 	watchdogRestarts int
@@ -113,6 +116,11 @@ func (d *Daemon) Run() error {
 	if err := d.apiServer.Start(); err != nil {
 		d.logger.Printf("warning: API server failed to start: %v", err)
 	}
+
+	d.drainSpool()
+	d.stopSpool = make(chan struct{})
+	d.spoolDone = make(chan struct{})
+	go d.runSpoolLoop()
 
 	d.stopWatchdog = make(chan struct{})
 	d.watchdogDone = make(chan struct{})
@@ -397,6 +405,32 @@ func (d *Daemon) trackSessionFile(sessionID, filePath string) {
 // HandleRecordedEvent processes an event pushed via the HTTP API record endpoint.
 func (d *Daemon) HandleRecordedEvent(event *schema.Event) {
 	d.handleEvent(event)
+}
+
+func (d *Daemon) runSpoolLoop() {
+	defer close(d.spoolDone)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			d.drainSpool()
+		case <-d.stopSpool:
+			return
+		}
+	}
+}
+
+func (d *Daemon) drainSpool() {
+	n, err := spool.Drain(d.cfg.SpoolDir(), d.processEvent)
+	if err != nil {
+		d.logger.Printf("warning: spool drain failed: %v", err)
+		return
+	}
+	if n > 0 {
+		d.logger.Printf("indexed %d spooled event(s) recorded while the daemon was unreachable", n)
+	}
 }
 
 func (d *Daemon) runCheckpointLoop() {
@@ -730,6 +764,12 @@ func (d *Daemon) cleanup() {
 		d.logger.Println("shutdown: stopping session registry...")
 		d.registry.Stop()
 		d.logger.Println("shutdown: session registry stopped")
+	}
+
+	if d.stopSpool != nil {
+		close(d.stopSpool)
+		<-d.spoolDone
+		d.drainSpool()
 	}
 
 	if d.stopCleanup != nil {

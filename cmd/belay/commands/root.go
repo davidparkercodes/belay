@@ -45,6 +45,7 @@ attribute every change.`,
 		newAIInstructionsCmd(),
 		newHookCmd(),
 		newGitHooksCmd(),
+		newServiceCmd(),
 	)
 
 	return cmd

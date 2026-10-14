@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/davidparkercodes/belay/internal/config"
-	"github.com/davidparkercodes/belay/internal/daemon"
 	"github.com/davidparkercodes/belay/internal/index"
 	"github.com/davidparkercodes/belay/internal/store"
 
@@ -26,12 +25,17 @@ active AI sessions, storage usage, and recent activity.`,
 	cmd.Flags().Bool("json", false, "Output as JSON")
 	cmd.Flags().Bool("sessions", false, "Show only session info")
 	cmd.Flags().Bool("storage", false, "Show only storage info")
+	cmd.Flags().StringSlice("scan", nil, "Check every Belay project under these directories (exits 1 if any is unhealthy)")
 
 	return cmd
 }
 
 func runStatus(cmd *cobra.Command, args []string) error {
 	jsonOutput, _ := cmd.Flags().GetBool("json")
+
+	if dirs, _ := cmd.Flags().GetStringSlice("scan"); len(dirs) > 0 {
+		return runStatusScan(dirs, jsonOutput)
+	}
 
 	projectRoot, err := config.FindProjectRoot()
 	if err != nil {
@@ -43,7 +47,8 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	daemonRunning, daemonPID := daemon.IsRunning(cfg)
+	health := checkProject(cfg)
+	daemonRunning, daemonPID := health.DaemonRunning, health.DaemonPID
 
 	if jsonOutput {
 		status := map[string]interface{}{
@@ -51,6 +56,10 @@ func runStatus(cmd *cobra.Command, args []string) error {
 			"belay_path":     cfg.BelayPath,
 			"daemon_running": daemonRunning,
 			"daemon_pid":     daemonPID,
+			"api_ok":         health.APIOK,
+			"api_port":       health.APIPort,
+			"api_error":      health.APIError,
+			"spooled_events": health.Spooled,
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -65,9 +74,18 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	if daemonRunning {
 		fmt.Printf("  Daemon:  \033[32mrunning\033[0m (PID %d)\n", daemonPID)
+		if health.APIOK {
+			fmt.Printf("  API:     \033[32mok\033[0m http://127.0.0.1:%d\n", health.APIPort)
+		} else {
+			fmt.Printf("  API:     \033[31munavailable\033[0m on port %d: %s\n", health.APIPort, health.APIError)
+			fmt.Println("           Hooks cannot reach this daemon. Run 'belay daemon restart'")
+		}
 	} else {
 		fmt.Println("  Daemon:  \033[31mstopped\033[0m")
 		fmt.Println("           Run 'belay daemon start' to begin watching files")
+	}
+	if health.Spooled > 0 {
+		fmt.Printf("  Queued:  %d event(s) waiting in %s\n", health.Spooled, cfg.SpoolDir())
 	}
 	fmt.Println()
 

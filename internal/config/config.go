@@ -223,6 +223,18 @@ func (c *Config) LogPath() string {
 	return filepath.Join(c.BelayPath, "daemon.log")
 }
 
+func (c *Config) APIPortPath() string {
+	return filepath.Join(c.BelayPath, "daemon.port")
+}
+
+func (c *Config) SpoolDir() string {
+	return filepath.Join(c.BelayPath, "spool")
+}
+
+func (c *Config) StartLockPath() string {
+	return filepath.Join(c.BelayPath, "daemon.lock")
+}
+
 // SocketPath returns the path to the daemon Unix socket.
 func (c *Config) SocketPath() string {
 	return filepath.Join(c.BelayPath, "daemon.sock")
@@ -342,7 +354,10 @@ func FindProjectRoot() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("get working directory: %w", err)
 	}
+	return FindProjectRootFrom(dir)
+}
 
+func FindProjectRootFrom(dir string) (string, error) {
 	for {
 		belayPath := filepath.Join(dir, BelayDir)
 		if info, err := os.Stat(belayPath); err == nil && info.IsDir() {
@@ -374,4 +389,18 @@ func Load(projectRoot string) (*Config, error) {
 	cfg.BelayPath = filepath.Join(projectRoot, BelayDir)
 
 	return cfg, nil
+}
+
+func SameRoot(a, b string) bool {
+	return canonicalRoot(a) == canonicalRoot(b)
+}
+
+func canonicalRoot(p string) string {
+	if abs, err := filepath.Abs(p); err == nil {
+		p = abs
+	}
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		p = real
+	}
+	return filepath.Clean(p)
 }

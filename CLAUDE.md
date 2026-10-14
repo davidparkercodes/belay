@@ -65,4 +65,4 @@ Each event captures:
 
 ## Ports (defaults, configurable in .belay/config.toml)
 
-- API (embedded in daemon): 33412
+- API (embedded in daemon): 33412 preferred; falls back to a free port if taken. Bound port is written to `.belay/daemon.port`. Requests carrying `X-Belay-Project` for another project get 409 `project_mismatch`.

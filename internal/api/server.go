@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -14,8 +15,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
+	"github.com/davidparkercodes/belay/internal/apiclient"
 	"github.com/davidparkercodes/belay/internal/config"
 	"github.com/davidparkercodes/belay/internal/conflict"
 	"github.com/davidparkercodes/belay/internal/dashboard"
@@ -50,6 +53,7 @@ type Server struct {
 	server   *http.Server
 	version  string
 
+	port          int
 	startedAt     time.Time
 	rl            *rateLimiter
 	watcherHealth WatcherHealthProvider
@@ -91,7 +95,7 @@ func (s *Server) Start() error {
 	mux := http.NewServeMux()
 
 	s.rl = newRateLimiter(100, 100) // 100 req/s per IP, burst of 100
-	handler := rateLimitMiddleware(s.rl, corsMiddleware(mux))
+	handler := rateLimitMiddleware(s.rl, corsMiddleware(s.projectMiddleware(mux)))
 
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 
@@ -145,7 +149,21 @@ func (s *Server) Start() error {
 
 	ln, err := net.Listen("tcp", s.server.Addr)
 	if err != nil {
-		return fmt.Errorf("listen %s: %w", s.server.Addr, err)
+		if !isAddrInUse(err) {
+			return fmt.Errorf("listen %s: %w", s.server.Addr, err)
+		}
+		fallback, fallbackErr := net.Listen("tcp", fmt.Sprintf("%s:0", host))
+		if fallbackErr != nil {
+			return fmt.Errorf("listen %s: %w", s.server.Addr, err)
+		}
+		s.logger.Printf("warning: API port %d is already in use (another Belay daemon or program); using free port %d instead", port, fallback.Addr().(*net.TCPAddr).Port)
+		ln = fallback
+	}
+	port = ln.Addr().(*net.TCPAddr).Port
+	s.port = port
+	s.server.Addr = fmt.Sprintf("%s:%d", host, port)
+	if err := apiclient.WritePortFile(s.cfg, port); err != nil {
+		s.logger.Printf("warning: could not write %s: %v", s.cfg.APIPortPath(), err)
 	}
 
 	if host != "127.0.0.1" && host != "localhost" && host != "::1" {
@@ -172,6 +190,7 @@ func (s *Server) Stop() error {
 	if s.server == nil {
 		return nil
 	}
+	apiclient.RemovePortFile(s.cfg, s.port)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return s.server.Shutdown(ctx)
@@ -193,8 +212,11 @@ func (s *Server) Broadcast(msg *EventMessage) {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	overallStatus := "ok"
 	resp := map[string]interface{}{
-		"version": s.version,
-		"uptime":  time.Since(s.startedAt).String(),
+		"version":      s.version,
+		"uptime":       time.Since(s.startedAt).String(),
+		"project_root": s.cfg.ProjectRoot,
+		"pid":          os.Getpid(),
+		"port":         s.port,
 	}
 
 	if s.watcherHealth != nil {
@@ -924,13 +946,37 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 
 var localOriginPattern = regexp.MustCompile(`^https?://(localhost|127\.0\.0\.1)(:\d+)?$`)
 
+func (s *Server) Port() int {
+	return s.port
+}
+
+func (s *Server) projectMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if claimed := r.Header.Get(apiclient.ProjectHeader); claimed != "" && !config.SameRoot(claimed, s.cfg.ProjectRoot) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error":        fmt.Sprintf("this daemon serves %s, not %s", s.cfg.ProjectRoot, claimed),
+				"code":         "project_mismatch",
+				"project_root": s.cfg.ProjectRoot,
+			})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func isAddrInUse(err error) bool {
+	return errors.Is(err, syscall.EADDRINUSE) || strings.Contains(err.Error(), "address already in use") || strings.Contains(err.Error(), "Only one usage of each socket address")
+}
+
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
 		if origin != "" && localOriginPattern.MatchString(origin) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, "+apiclient.ProjectHeader)
 		}
 
 		if r.Method == "OPTIONS" {

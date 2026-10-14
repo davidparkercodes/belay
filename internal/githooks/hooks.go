@@ -19,7 +19,11 @@ func postCheckoutScript() string {
 	return fmt.Sprintf(`%s
 (
   [ -d ".belay" ] || exit 0
-  curl -sf --max-time 1 "http://localhost:%s/health" >/dev/null 2>&1 || exit 0
+  belay_port=$(cat .belay/daemon.port 2>/dev/null)
+  [ -n "$belay_port" ] || belay_port=$(sed -n 's/^port *= *\([0-9][0-9]*\).*/\1/p' .belay/config.toml 2>/dev/null | head -1)
+  [ -n "$belay_port" ] || belay_port=%s
+  belay_root=$(pwd -P)
+  curl -sf --max-time 1 -H "X-Belay-Project: $belay_root" "http://127.0.0.1:$belay_port/api/health" >/dev/null 2>&1 || exit 0
 
   prev_head="$1"
   new_head="$2"
@@ -31,19 +35,24 @@ func postCheckoutScript() string {
     [ -z "$files_changed" ] && files_changed=0
   fi
 
-  curl -sf --max-time 1 -X POST "http://localhost:%s/api/events/git" \
+  curl -sf --max-time 1 -X POST "http://127.0.0.1:$belay_port/api/events/git" \
     -H "Content-Type: application/json" \
+    -H "X-Belay-Project: $belay_root" \
     -d "{\"operation\":\"checkout\",\"ref_from\":\"$prev_head\",\"ref_to\":\"$new_head\",\"branch\":\"$branch\",\"files_changed\":${files_changed}}" \
     >/dev/null 2>&1
 ) &
-%s`, markerStart, belayPort, belayPort, markerEnd)
+%s`, markerStart, belayPort, markerEnd)
 }
 
 func postMergeScript() string {
 	return fmt.Sprintf(`%s
 (
   [ -d ".belay" ] || exit 0
-  curl -sf --max-time 1 "http://localhost:%s/health" >/dev/null 2>&1 || exit 0
+  belay_port=$(cat .belay/daemon.port 2>/dev/null)
+  [ -n "$belay_port" ] || belay_port=$(sed -n 's/^port *= *\([0-9][0-9]*\).*/\1/p' .belay/config.toml 2>/dev/null | head -1)
+  [ -n "$belay_port" ] || belay_port=%s
+  belay_root=$(pwd -P)
+  curl -sf --max-time 1 -H "X-Belay-Project: $belay_root" "http://127.0.0.1:$belay_port/api/health" >/dev/null 2>&1 || exit 0
 
   squash_flag="$1"
   prev_head=$(git rev-parse ORIG_HEAD 2>/dev/null || echo "unknown")
@@ -55,19 +64,24 @@ func postMergeScript() string {
     [ -z "$files_changed" ] && files_changed=0
   fi
 
-  curl -sf --max-time 1 -X POST "http://localhost:%s/api/events/git" \
+  curl -sf --max-time 1 -X POST "http://127.0.0.1:$belay_port/api/events/git" \
     -H "Content-Type: application/json" \
+    -H "X-Belay-Project: $belay_root" \
     -d "{\"operation\":\"merge\",\"ref_from\":\"$prev_head\",\"ref_to\":\"$new_head\",\"branch\":\"$branch\",\"files_changed\":${files_changed}}" \
     >/dev/null 2>&1
 ) &
-%s`, markerStart, belayPort, belayPort, markerEnd)
+%s`, markerStart, belayPort, markerEnd)
 }
 
 func postRewriteScript() string {
 	return fmt.Sprintf(`%s
 (
   [ -d ".belay" ] || exit 0
-  curl -sf --max-time 1 "http://localhost:%s/health" >/dev/null 2>&1 || exit 0
+  belay_port=$(cat .belay/daemon.port 2>/dev/null)
+  [ -n "$belay_port" ] || belay_port=$(sed -n 's/^port *= *\([0-9][0-9]*\).*/\1/p' .belay/config.toml 2>/dev/null | head -1)
+  [ -n "$belay_port" ] || belay_port=%s
+  belay_root=$(pwd -P)
+  curl -sf --max-time 1 -H "X-Belay-Project: $belay_root" "http://127.0.0.1:$belay_port/api/health" >/dev/null 2>&1 || exit 0
 
   command_name="$1"
   prev_head=$(git rev-parse ORIG_HEAD 2>/dev/null || echo "unknown")
@@ -79,12 +93,13 @@ func postRewriteScript() string {
     [ -z "$files_changed" ] && files_changed=0
   fi
 
-  curl -sf --max-time 1 -X POST "http://localhost:%s/api/events/git" \
+  curl -sf --max-time 1 -X POST "http://127.0.0.1:$belay_port/api/events/git" \
     -H "Content-Type: application/json" \
+    -H "X-Belay-Project: $belay_root" \
     -d "{\"operation\":\"rewrite\",\"ref_from\":\"$prev_head\",\"ref_to\":\"$new_head\",\"branch\":\"$branch\",\"files_changed\":${files_changed}}" \
     >/dev/null 2>&1
 ) &
-%s`, markerStart, belayPort, belayPort, markerEnd)
+%s`, markerStart, belayPort, markerEnd)
 }
 
 func hookScript(name string) string {
