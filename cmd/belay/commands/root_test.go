@@ -49,6 +49,7 @@ func TestNewRootCmd_RegistersAllSubcommands(t *testing.T) {
 	expectedCommands := []string{
 		"init",
 		"status",
+		"update",
 		"daemon",
 		"log",
 		"diff",

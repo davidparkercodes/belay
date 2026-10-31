@@ -7,7 +7,7 @@ import (
 )
 
 func TestStatusCmd_BasicProperties(t *testing.T) {
-	cmd := newStatusCmd()
+	cmd := newStatusCmd("v0.0.0")
 
 	if cmd.Use != "status" {
 		t.Errorf("Use = %q, want %q", cmd.Use, "status")
@@ -18,7 +18,7 @@ func TestStatusCmd_BasicProperties(t *testing.T) {
 }
 
 func TestStatusCmd_Flags(t *testing.T) {
-	cmd := newStatusCmd()
+	cmd := newStatusCmd("v0.0.0")
 
 	tests := []struct {
 		name     string

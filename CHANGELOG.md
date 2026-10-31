@@ -2,6 +2,21 @@
 
 All notable changes to Belay are documented here.
 
+## v1.10.0 - 2026-10-31
+
+### Added
+- **`belay update`** -- installs the latest release the same way the running copy was installed: Homebrew runs `brew upgrade --cask davidparkercodes/tap/belay`, a `go install` copy runs `go install` again (or prints the command when Go is not on PATH), and a release binary is downloaded for the current OS and architecture, verified against the release's `checksums.txt` (a mismatch or a missing entry is refused), and renamed into place atomically with the old binary kept as `belay.prev`. Development builds and binaries inside a source checkout are refused with a hint. `--check` only reports, `--version vX.Y.Z` installs a specific release, `--yes` skips the one confirmation asked on a terminal, and `--json` is available. A directory that cannot be written is named in the error.
+- **Update notice** -- a running daemon checks for a new release at most once a day, in the background and never during startup, and caches the answer in `<user cache dir>/belay/update.json`. `belay status` reads only that cache and shows one line when a newer release exists. `BELAY_NO_UPDATE_CHECK=1` turns off every check.
+- **Per-user update setting** -- `<user config dir>/belay/config.toml` takes `[update] mode = "notify" | "auto" | "off"` (default `notify`). `belay update --mode <mode>` or `belay update --auto on|off` sets it. In `auto` mode the daemon installs a newer cached release through the same path as `belay update` and logs one line; a failure is logged and retried on the next check.
+- **Daemons restart into a replaced binary** -- the daemon watches the executable path it was launched from (the stable link, not a versioned Homebrew path) and, once a replacement has settled, passes a `--version` probe and the daemon is idle (no queued or running projection, store migration, compaction or update), shuts down cleanly and re-execs itself with the same arguments. The PID and PID lock carry over, so systemd, launchd and plain background daemons keep working. This covers `belay update`, `brew upgrade` and any other upgrade. On Windows the daemon logs that a restart is needed.
+- **`install.sh`** -- `curl -fsSL https://raw.githubusercontent.com/davidparkercodes/belay/main/install.sh | sh` installs the latest release (or `BELAY_VERSION`) into `${BELAY_INSTALL_DIR:-$HOME/.local/bin}` after verifying its sha256, prints a PATH hint when needed, and never uses `sudo`.
+
+### Changed
+- **Background daemons are launched from the stable `belay` on PATH** -- when that is the same binary as the running one, so a package manager's link is recorded instead of a versioned path that an upgrade deletes. `belay service install` already did this.
+
+### Fixed
+- **`belay init` honors `BELAY_NO_AUTOSTART=1`** -- init started its daemon directly instead of through the shared autostart path, so the setting was ignored there. Under `go test` this also made init re-launch the test binary as a daemon.
+
 ## v1.9.0 - 2026-10-31
 
 ### Added

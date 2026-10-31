@@ -166,7 +166,10 @@ func serviceResolveBinary() (string, error) {
 		}
 		return abs, nil
 	}
+	return stableExecutable()
+}
 
+func stableExecutable() (string, error) {
 	exe, err := serviceExecutable()
 	if err != nil {
 		return "", fmt.Errorf("find executable: %w", err)

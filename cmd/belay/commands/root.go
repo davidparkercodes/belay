@@ -16,7 +16,7 @@ captures every file change with AI session attribution.
 Built for concurrent multi-agent development workflows where
 traditional git fails. Never lose work, replay any session,
 attribute every change.`,
-		Version: version,
+		Version:      version,
 		SilenceUsage: true,
 	}
 
@@ -25,7 +25,7 @@ attribute every change.`,
 	cmd.AddCommand(
 		newInitCmd(),
 		newRemoveCmd(),
-		newStatusCmd(),
+		newStatusCmd(version),
 		newDaemonCmd(version),
 		newLogCmd(),
 		newGrepCmd(),
@@ -48,6 +48,7 @@ attribute every change.`,
 		newServiceCmd(),
 		newKeyCmd(),
 		newScrubCmd(),
+		newUpdateCmd(version),
 	)
 
 	return cmd

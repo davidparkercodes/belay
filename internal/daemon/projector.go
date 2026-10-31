@@ -99,6 +99,12 @@ func (p *projector) Status() map[string]interface{} {
 	return status
 }
 
+func (p *projector) idle() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.queue) == 0 && p.running == nil
+}
+
 func (p *projector) next() (gitbridge.ProjectionJob, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

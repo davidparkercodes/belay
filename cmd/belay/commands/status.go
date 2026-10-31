@@ -10,18 +10,21 @@ import (
 
 	"github.com/davidparkercodes/belay/internal/config"
 	"github.com/davidparkercodes/belay/internal/index"
+	"github.com/davidparkercodes/belay/internal/selfupdate"
 	"github.com/davidparkercodes/belay/internal/store"
 
 	"github.com/spf13/cobra"
 )
 
-func newStatusCmd() *cobra.Command {
+func newStatusCmd(version string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show Belay system status",
 		Long: `Display the current state of Belay including daemon status,
 active AI sessions, storage usage, and recent activity.`,
-		RunE: runStatus,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runStatus(cmd, args, version)
+		},
 	}
 
 	cmd.Flags().Bool("json", false, "Output as JSON")
@@ -32,7 +35,7 @@ active AI sessions, storage usage, and recent activity.`,
 	return cmd
 }
 
-func runStatus(cmd *cobra.Command, args []string) error {
+func runStatus(cmd *cobra.Command, args []string, version string) error {
 	jsonOutput, _ := cmd.Flags().GetBool("json")
 
 	if dirs, _ := cmd.Flags().GetStringSlice("scan"); len(dirs) > 0 {
@@ -67,6 +70,9 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		if line := scrubNoticeLine(cfg); line != "" {
 			status["agent_logs"] = line
 		}
+		if line := updateNoticeLine(version); line != "" {
+			status["update"] = line
+		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(status)
@@ -77,6 +83,10 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Project: %s\n", projectRoot)
 	fmt.Printf("  Data:    %s\n", cfg.BelayPath)
 	fmt.Println()
+	if line := updateNoticeLine(version); line != "" {
+		fmt.Println("  " + line)
+		fmt.Println()
+	}
 
 	if daemonRunning {
 		fmt.Printf("  Daemon:  \033[32mrunning\033[0m (PID %d)\n", daemonPID)
@@ -118,6 +128,13 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+func updateNoticeLine(version string) string {
+	if version == "" {
+		return ""
+	}
+	return selfupdate.StatusNotice(version, os.Getenv)
 }
 
 func printCompactionStatus(cfg *config.Config) {

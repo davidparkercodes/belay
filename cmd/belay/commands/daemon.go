@@ -22,7 +22,7 @@ func newDaemonCmd(version string) *cobra.Command {
 		newDaemonStartCmd(version),
 		newDaemonStopCmd(),
 		newDaemonRestartCmd(version),
-		newDaemonStatusCmd(),
+		newDaemonStatusCmd(version),
 	)
 
 	return cmd
@@ -41,9 +41,9 @@ func newDaemonStartCmd(version string) *cobra.Command {
 }
 
 func startDaemonBackground(projectRoot string) (int, error) {
-	exe, err := os.Executable()
+	exe, err := stableExecutable()
 	if err != nil {
-		return 0, fmt.Errorf("find executable: %w", err)
+		return 0, err
 	}
 
 	bgCmd := exec.Command(exe, "daemon", "start", "--foreground")
@@ -64,6 +64,14 @@ func startDaemonBackground(projectRoot string) (int, error) {
 	return pid, nil
 }
 
+func otherDaemonRunning(cfg *config.Config) (bool, int) {
+	running, pid := daemon.IsRunning(cfg)
+	if pid == os.Getpid() {
+		return false, 0
+	}
+	return running, pid
+}
+
 func runDaemonStart(cmd *cobra.Command, args []string, version string) error {
 	foreground, _ := cmd.Flags().GetBool("foreground")
 
@@ -77,7 +85,7 @@ func runDaemonStart(cmd *cobra.Command, args []string, version string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	if running, pid := daemon.IsRunning(cfg); running {
+	if running, pid := otherDaemonRunning(cfg); running {
 		fmt.Printf("Daemon is already running (PID %d)\n", pid)
 		return nil
 	}
@@ -159,12 +167,12 @@ func newDaemonRestartCmd(version string) *cobra.Command {
 	}
 }
 
-func newDaemonStatusCmd() *cobra.Command {
+func newDaemonStatusCmd(version string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
 		Short: "Show daemon status",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runStatus(cmd, args)
+			return runStatus(cmd, args, version)
 		},
 	}
 }

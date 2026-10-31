@@ -53,7 +53,9 @@ func (d *Daemon) runMigrationLoop() {
 		case <-d.stopMigration:
 			return
 		}
+		d.migrating.Store(true)
 		res, err := d.newMigrator().Run()
+		d.migrating.Store(false)
 		switch {
 		case err == nil:
 			d.logger.Printf("store migration complete: %d objects encrypted, %d corrupt kept, %d legacy objects removed",

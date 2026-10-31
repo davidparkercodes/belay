@@ -1,11 +1,14 @@
 package commands
 
 import (
+	"context"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/davidparkercodes/belay/internal/selfupdate"
 	"github.com/davidparkercodes/belay/internal/testenv"
 )
 
@@ -19,6 +22,18 @@ func TestMain(m *testing.M) {
 	autoStartLauncher = func(string) (int, error) {
 		return 0, errors.New("daemon launch disabled in tests")
 	}
+	updateNewClient = func(string) *selfupdate.Client {
+		c := selfupdate.NewClient("belay-test")
+		c.HTTP = &http.Client{Transport: noNetwork{}}
+		return c
+	}
+	selfupdate.RunCommand = func(context.Context, []string, string, ...string) ([]byte, error) {
+		return nil, errors.New("commands disabled in tests")
+	}
+	selfupdate.LookPath = func(string) (string, error) {
+		return "", errors.New("lookups disabled in tests")
+	}
+	updateIsTerminal = func() bool { return false }
 	restoreGit, err := testenv.IsolateGit()
 	if err != nil {
 		panic(err)
@@ -34,4 +49,10 @@ func TestMain(m *testing.M) {
 	_ = os.RemoveAll(dir)
 	restoreGit()
 	os.Exit(code)
+}
+
+type noNetwork struct{}
+
+func (noNetwork) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("network disabled in tests")
 }

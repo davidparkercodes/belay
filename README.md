@@ -21,6 +21,12 @@ Belay watches your filesystem, records every change, and tags each one to the AI
 
 ## Install
 
+**Install script (macOS and Linux)**
+```bash
+curl -fsSL https://raw.githubusercontent.com/davidparkercodes/belay/main/install.sh | sh
+```
+It downloads the latest release for your OS and architecture, verifies it against the release's `checksums.txt`, and installs it to `~/.local/bin` (set `BELAY_INSTALL_DIR` to change that, or `BELAY_VERSION=v1.2.3` to pin a version). It never uses `sudo`, and prints a PATH hint if the directory is not on your PATH.
+
 **Homebrew (macOS)**
 ```bash
 brew install davidparkercodes/tap/belay
@@ -40,6 +46,26 @@ cd belay && go build -o bin/belay ./cmd/belay
 ```
 
 Belay is a single static binary with zero runtime dependencies.
+
+### Updating
+
+```bash
+belay update            # install the latest release the way this copy was installed
+belay update --check    # only report whether a newer release exists
+belay update --version v1.2.3
+```
+
+`belay update` detects how Belay was installed. A Homebrew install runs `brew upgrade --cask davidparkercodes/tap/belay`, a `go install` copy runs `go install` again, and a release binary (install script or Releases page) is downloaded, verified against `checksums.txt` and swapped in place, keeping the old binary as `belay.prev`. Development builds are left alone. Running daemons notice the new binary and restart into it once they are idle, keeping the same PID, so service units keep working. This also happens after a plain `brew upgrade`.
+
+Updates are a per-user setting in `<user config dir>/belay/config.toml`:
+
+| Mode | What happens |
+|------|--------------|
+| `notify` (default) | A daemon checks for a new release at most once a day in the background, and `belay status` shows one line when one is available |
+| `auto` | The daemon also installs the new release itself (Homebrew installs run brew; release binaries are verified and swapped) |
+| `off` | No checks |
+
+Set it with `belay update --mode notify|auto|off` or `belay update --auto on|off`. `BELAY_NO_UPDATE_CHECK=1` turns off every background check and the status line. Hooks, `belay record` and `belay checkpoint` never touch the network.
 
 > **Windows note:** Belay builds and runs on Windows but has not been tested in real-world use. macOS and Linux are the primary platforms. If you're a Windows user and want to help, we'd love testers. [Open an issue](https://github.com/davidparkercodes/belay/issues) with your experience.
 
@@ -224,6 +250,7 @@ If several machines share one checkout but have different working trees, give ea
 | `belay key status` | Where the store key lives, its id, and the store's encryption and migration progress |
 | `belay key export` / `import` | Back up the store key, or install it on another machine (`--force` replaces a different key) |
 | `belay key migrate` | Encrypt a legacy store now (the daemon otherwise does it in the background) |
+| `belay update` | Update to the latest release (`--check`, `--version`, `--yes`, `--json`, `--mode notify\|auto\|off`, `--auto on\|off`) |
 | `belay scrub` | Redact credentials from idle AI agent session logs (`--dry-run`, `--json`, `--undo <log>`, `--all-idle`) |
 
 ## API Endpoints

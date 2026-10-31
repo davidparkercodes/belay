@@ -9,8 +9,10 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/davidparkercodes/belay/internal/api"
@@ -69,6 +71,16 @@ type Daemon struct {
 
 	stopScrub chan struct{}
 	scrubDone chan struct{}
+
+	launchPath      string
+	restartCh       chan string
+	updateCancel    func()
+	updateDone      chan struct{}
+	binaryWatch     *binaryWatch
+	stopBinaryWatch chan struct{}
+	binaryWatchDone chan struct{}
+	migrating       atomic.Bool
+	updating        atomic.Bool
 }
 
 // compactionStartupSettle is how long after startup the first compaction check waits,
@@ -103,6 +115,7 @@ func New(cfg *config.Config, version string) (*Daemon, error) {
 // If a second signal arrives during cleanup, the daemon force-exits immediately.
 func (d *Daemon) Run() error {
 	d.logger.Println("starting Belay daemon...")
+	d.launchPath = launchPathFor(os.Args[0], exec.LookPath)
 
 	sigCh := shutdownSignalChannel()
 
@@ -153,13 +166,18 @@ func (d *Daemon) Run() error {
 	go d.runWatchdog()
 
 	d.startMigration()
+	d.startUpdateLoops()
 
 	d.logger.Printf("daemon running (PID %d), watching %s", os.Getpid(), d.cfg.ProjectRoot)
 	d.logger.Printf("session detectors: %v", d.registry.DetectorNames())
 
-	// Block until the first shutdown signal.
-	sig := <-sigCh
-	d.logger.Printf("received %v, starting graceful shutdown...", sig)
+	var restartPath string
+	select {
+	case sig := <-sigCh:
+		d.logger.Printf("received %v, starting graceful shutdown...", sig)
+	case restartPath = <-d.restartCh:
+		d.logger.Printf("shutting down to restart into %s (PID stays %d)", restartPath, os.Getpid())
+	}
 
 	// Determine shutdown timeout.
 	timeout := time.Duration(d.cfg.Daemon.ShutdownTimeoutSec) * time.Second
@@ -172,12 +190,17 @@ func (d *Daemon) Run() error {
 	cleanupDone := make(chan struct{})
 	go func() {
 		d.cleanup()
-		d.pidLock.Release()
+		if restartPath == "" {
+			d.pidLock.Release()
+		}
 		close(cleanupDone)
 	}()
 
 	select {
 	case <-cleanupDone:
+		if restartPath != "" {
+			return d.restart(restartPath)
+		}
 		d.logger.Println("graceful shutdown complete")
 		return nil
 	case <-time.After(timeout):
@@ -841,6 +864,8 @@ func (d *Daemon) cleanup() {
 		<-d.watchdogDone
 		d.logger.Println("shutdown: watchdog stopped")
 	}
+
+	d.stopUpdateLoops()
 
 	if d.stopMigration != nil {
 		d.logger.Println("shutdown: pausing store migration...")

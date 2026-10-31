@@ -24,7 +24,8 @@ belay/
 │   ├── replay/              # Session replay, snapshots, unified diff
 │   ├── conflict/            # Conflict detection across concurrent sessions
 │   ├── git/                 # Git bridge (commit, stash, import)
-│   └── config/              # Configuration (TOML)
+│   ├── selfupdate/          # Release check, verified download, binary swap, update cache
+│   └── config/              # Configuration (TOML), plus the per-user config
 ├── hooks/                   # AI tool integration scripts
 └── go.mod
 ```
@@ -49,6 +50,7 @@ go vet ./...
 - **Session Detection:** Plugin architecture; Claude Code detector included
 - **File Watcher:** macOS uses FSEvents; Linux/Windows use fsnotify
 - **Git projection:** `internal/git` builds projection commits with plumbing only; `SyncRef` makes the remote the source of truth (fast-forward or replay local-only projections onto the remote tip) and `RunProjection` is the one job runner shared by the CLI and the daemon's single-worker projector queue (`internal/daemon/projector.go`, `POST /api/project`)
+- **Self-update:** `internal/selfupdate` detects the install method (Homebrew, `go install`, release binary, dev) and installs through it; release binaries are verified against `checksums.txt` and renamed into place. The daemon's update loop (`internal/daemon/update.go`) checks at most once per 24h into `<user cache dir>/belay/update.json` and, in `auto` mode (`<user config dir>/belay/config.toml`), installs. Its binary watch re-execs the daemon (same PID) once the launch path's file is replaced, settled, probed and the daemon is idle. The exec, the probe and all commands run through package variables that tests stub; tests never exec the test binary or touch the network
 - **Session linking:** process-detected sessions (`<tool>-pid-N`) are linked to the tool's own session id via `record`/`checkpoint` PIDs or `POST /api/sessions/link`; links live in session metadata (`linked_session_id`) and every session query expands through them (`index.ExpandSessions`)
 
 ## Event Schema (v1)
