@@ -23,14 +23,20 @@ import (
 	"github.com/davidparkercodes/belay/internal/replay"
 	"github.com/davidparkercodes/belay/internal/schema"
 	"github.com/davidparkercodes/belay/internal/store"
+	"github.com/davidparkercodes/belay/internal/testenv"
 )
 
 // ─── TestMain ────────────────────────────────────────────────────────────────
 
 func TestMain(m *testing.M) {
+	restoreGit, err := testenv.IsolateGit()
+	if err != nil {
+		panic(err)
+	}
 	store.GCGracePeriod = 0
 	StartRun()
 	code := m.Run()
+	restoreGit()
 
 	report := GenerateReport()
 

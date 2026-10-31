@@ -48,7 +48,9 @@ func TestKeyImportExportRoundTrip(t *testing.T) {
 
 	master, _ := storekey.Generate()
 	in := filepath.Join(t.TempDir(), "backup.key")
-	os.WriteFile(in, []byte(storekey.Encode(master)+"\n"), 0o600)
+	if err := os.WriteFile(in, []byte(storekey.Encode(master)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := runRoot(t, "key", "import", in); err != nil {
 		t.Fatalf("import: %v", err)
@@ -70,7 +72,9 @@ func TestKeyImportExportRoundTrip(t *testing.T) {
 	}
 
 	other, _ := storekey.Generate()
-	os.WriteFile(in, []byte(storekey.Encode(other)), 0o600)
+	if err := os.WriteFile(in, []byte(storekey.Encode(other)), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := runRoot(t, "key", "import", in); err == nil || !strings.Contains(err.Error(), "--force") {
 		t.Fatalf("import of a different key must be refused without --force: %v", err)
 	}
@@ -92,8 +96,12 @@ func legacyProject(t *testing.T) (*config.Config, map[string][]byte) {
 	root := t.TempDir()
 	cfg := config.DefaultConfig(root)
 	cfg.Safety.AllowWrites = true
-	os.MkdirAll(cfg.BelayPath, 0o755)
-	os.WriteFile(cfg.ConfigPath(), []byte(cfg.ToTOML()), 0o644)
+	if err := os.MkdirAll(cfg.BelayPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg.ConfigPath(), []byte(cfg.ToTOML()), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	legacy, err := store.NewStore(cfg.ObjectsDir(), true)
 	if err != nil {
@@ -111,7 +119,9 @@ func legacyProject(t *testing.T) (*config.Config, map[string][]byte) {
 		id, _, _ := legacy.Put(data)
 		ev := &schema.Event{EventID: schema.NewEventID(), Version: schema.SchemaVersion, FilePath: "conf.yml", Op: schema.OpModify, ContentHash: id, PreviousHash: prev}
 		ev.SetTimestamp(time.Now().Add(time.Duration(i-10) * time.Second))
-		idx.IndexEvent(ev, "", 0)
+		if err := idx.IndexEvent(ev, "", 0); err != nil {
+			t.Fatal(err)
+		}
 		contents[ev.EventID] = data
 		prev = id
 	}
@@ -153,7 +163,9 @@ func TestKeyMigrateCommandAndRestoreByteExact(t *testing.T) {
 		if enc, _ := objStore.IsEncrypted(ev.ContentHash); !enc {
 			t.Fatal("event still points at a legacy object")
 		}
-		os.WriteFile(target, []byte("edited since"), 0o644)
+		if err := os.WriteFile(target, []byte("edited since"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		if err := writeRestore(objStore, cfg, cfg.ProjectRoot, "conf.yml", ev, false, true); err != nil {
 			t.Fatalf("restore: %v", err)
 		}

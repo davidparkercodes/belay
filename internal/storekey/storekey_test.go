@@ -90,7 +90,9 @@ func TestFileProviderInstallRefusesDifferentKeyWithoutForce(t *testing.T) {
 
 func TestFileProviderRejectsMalformedKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "store.key")
-	os.WriteFile(path, []byte("not base64!!"), 0o600)
+	if err := os.WriteFile(path, []byte("not base64!!"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := (&FileProvider{Path: path}).Keys(); err == nil {
 		t.Fatal("expected error for malformed key file")
 	}
@@ -142,7 +144,9 @@ func TestChainReturnsBothKeysWhenTheyDiffer(t *testing.T) {
 	a, _ := Generate()
 	b, _ := Generate()
 	path := filepath.Join(t.TempDir(), "store.key")
-	(&FileProvider{Path: path}).Install(b, false)
+	if _, err := (&FileProvider{Path: path}).Install(b, false); err != nil {
+		t.Fatal(err)
+	}
 	c := &ChainProvider{Keychain: &fakeKeychain{available: true, stored: a}, File: &FileProvider{Path: path}}
 	keys, err := c.Keys()
 	if err != nil || len(keys) != 2 {

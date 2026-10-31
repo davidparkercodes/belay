@@ -51,7 +51,9 @@ func setupScrubProject(t *testing.T, args ...string) (root, logPath, content str
 		t.Fatal(err)
 	}
 	old := time.Now().Add(-time.Hour)
-	os.Chtimes(logPath, old, old)
+	if err := os.Chtimes(logPath, old, old); err != nil {
+		t.Fatal(err)
+	}
 	return root, logPath, content
 }
 
@@ -88,9 +90,7 @@ func TestInit_ScrubFlag(t *testing.T) {
 
 func TestInit_ScrubFlagInvalid(t *testing.T) {
 	dir := t.TempDir()
-	oldWd, _ := os.Getwd()
-	defer os.Chdir(oldWd)
-	os.Chdir(dir)
+	t.Chdir(dir)
 	cmd := NewRootCmd("test")
 	cmd.SetArgs([]string{"init", "-y", "--scrub", "sometimes"})
 	cmd.SetOut(&bytes.Buffer{})

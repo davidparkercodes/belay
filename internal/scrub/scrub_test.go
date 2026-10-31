@@ -234,9 +234,16 @@ func TestUndo_KeepsLinesAppendedAfterScrub(t *testing.T) {
 		t.Fatal(err)
 	}
 	extra := `{"type":"user","message":"resumed"}` + "\n"
-	fh, _ := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0)
-	fh.WriteString(extra)
-	fh.Close()
+	fh, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fh.WriteString(extra); err != nil {
+		t.Fatal(err)
+	}
+	if err := fh.Close(); err != nil {
+		t.Fatal(err)
+	}
 	res, err := f.scrubber.Undo(p)
 	if err != nil {
 		t.Fatal(err)
@@ -253,7 +260,9 @@ func TestUndo_RefusesWhenRewritten(t *testing.T) {
 	if _, err := f.scrubber.Run(RunOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(p, []byte("something else\n"), 0o640)
+	if err := os.WriteFile(p, []byte("something else\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := f.scrubber.Undo(p); !errors.Is(err, ErrChangedSince) {
 		t.Fatalf("err = %v", err)
 	}
@@ -472,9 +481,15 @@ func TestClaudeCodeSource_AllLogs(t *testing.T) {
 	f := newFixture(t)
 	f.writeLog("s1.jsonl", "{}\n", time.Hour)
 	other := filepath.Join(filepath.Dir(f.logDir), "-other-project")
-	os.MkdirAll(other, 0o755)
-	os.WriteFile(filepath.Join(other, "x.jsonl"), []byte("{}\n"), 0o600)
-	os.WriteFile(filepath.Join(other, "notes.txt"), []byte("x"), 0o600)
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(other, "x.jsonl"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(other, "notes.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	src := f.scrubber.Sources[0]
 	proj, _ := src.ProjectLogs()
 	all, _ := src.AllLogs()

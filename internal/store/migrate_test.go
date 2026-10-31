@@ -97,7 +97,9 @@ func newMigFixture(t *testing.T, files int) *migFixture {
 	meta := &schema.Event{EventID: schema.NewEventID(), Version: schema.SchemaVersion, FilePath: ".belay/sessions", Op: schema.OpCreate, SessionID: "s1",
 		Metadata: map[string]string{"event_type": "session_start", "tool_name": "test"}}
 	meta.SetTimestamp(base)
-	w.Append(meta)
+	if err := w.Append(meta); err != nil {
+		t.Fatal(err)
+	}
 	for id := range f.contents {
 		f.legacyIDs = append(f.legacyIDs, id)
 	}
@@ -297,7 +299,9 @@ func TestMigrationCorruptLegacyObjectIsKept(t *testing.T) {
 	legacy, _ := NewStore(f.objectsDir(), true)
 	badPath := legacy.objectPath(bad)
 	garbage := []byte("this is not the content you are looking for")
-	os.WriteFile(badPath, garbage, 0644)
+	if err := os.WriteFile(badPath, garbage, 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	s := f.open(t)
 	res, err := f.migrator(s).Run()
@@ -479,7 +483,9 @@ func TestMigrationWithLiveWriterSkipsActiveSegment(t *testing.T) {
 	if err := w.Append(ev); err != nil {
 		t.Fatalf("live writer broken after migration: %v", err)
 	}
-	w.Sync()
+	if err := w.Sync(); err != nil {
+		t.Fatal(err)
+	}
 	r, _ := eventlog.NewReader(f.eventsDir)
 	all, _ := r.ReadAll()
 	found := false
@@ -564,12 +570,16 @@ func TestMigrationStatusProgress(t *testing.T) {
 		}
 		return nil
 	}
-	m.Run()
+	if _, err := m.Run(); !errors.Is(err, errCrash) {
+		t.Fatalf("want errCrash, got %v", err)
+	}
 	st := ReadMigrationStatus(f.idx, f.manifestPath())
 	if st.Format != FormatEncrypted || st.Migration != MigrationPending || st.Phase != PhaseRemap || st.Copied != len(f.legacyIDs) || st.Total != len(f.legacyIDs) {
 		t.Fatalf("status = %+v", st)
 	}
-	f.migrator(s).Run()
+	if _, err := f.migrator(s).Run(); err != nil {
+		t.Fatal(err)
+	}
 	st = ReadMigrationStatus(f.idx, f.manifestPath())
 	if !st.Done() || st.Phase != PhaseDone {
 		t.Fatalf("final status = %+v", st)

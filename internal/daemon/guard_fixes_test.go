@@ -56,7 +56,9 @@ func TestDrainSpool_TransientStoreErrorRetriesInsteadOfSettingAside(t *testing.T
 		t.Fatal(err)
 	}
 	d.drainSpool()
-	os.Chmod(objects, 0o755)
+	if err := os.Chmod(objects, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	if bad, _ := spool.Bad(d.cfg.SpoolDir()); len(bad) != 0 {
 		t.Fatalf("a store write failure set the entry aside: %v", bad)

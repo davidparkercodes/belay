@@ -36,12 +36,18 @@ func TestScrubTick_AutoModeRedactsIdleLogs(t *testing.T) {
 	defer idx.Close()
 
 	logDir := filepath.Join(t.TempDir(), "proj")
-	os.MkdirAll(logDir, 0o755)
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	logPath := filepath.Join(logDir, "s.jsonl")
 	tok := "gh" + "p_" + strings.Repeat("Mn4Bv5Cx6Z", 3) + "a1S2d3"
-	os.WriteFile(logPath, []byte(`{"content":"`+tok+`"}`+"\n"), 0o600)
+	if err := os.WriteFile(logPath, []byte(`{"content":"`+tok+`"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	old := time.Now().Add(-time.Hour)
-	os.Chtimes(logPath, old, old)
+	if err := os.Chtimes(logPath, old, old); err != nil {
+		t.Fatal(err)
+	}
 
 	prev := scrubSources
 	scrubSources = func(string) []scrub.Source { return []scrub.Source{fixedSource{logPath}} }

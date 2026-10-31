@@ -311,7 +311,7 @@ func allHex(b []byte) bool {
 }
 
 func kebabWords(v []byte) bool {
-	if bytes.IndexAny(v, "-_") < 0 {
+	if !bytes.ContainsAny(v, "-_") {
 		return false
 	}
 	digits := 0

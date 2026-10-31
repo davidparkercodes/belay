@@ -110,7 +110,9 @@ func TestKeyedIDsDependOnKey(t *testing.T) {
 func TestOpenWithWrongKeyFailsClearly(t *testing.T) {
 	dir := t.TempDir()
 	s := openEncrypted(t, dir, true, storekey.NewMemoryProvider(testKey(t)))
-	s.Put([]byte("hello"))
+	if _, _, err := s.Put([]byte("hello")); err != nil {
+		t.Fatal(err)
+	}
 
 	_, err := Open(filepath.Join(dir, "objects"), Options{Encrypt: true, Keys: storekey.NewMemoryProvider(testKey(t)), ManifestPath: filepath.Join(dir, "store.json")})
 	if !errors.Is(err, ErrWrongKey) {
@@ -163,20 +165,26 @@ func TestTamperDetection(t *testing.T) {
 	rawA, _ := os.ReadFile(s.objectPath(a))
 	flipped := append([]byte(nil), rawA...)
 	flipped[len(flipped)-1] ^= 0xff
-	os.WriteFile(s.objectPath(a), flipped, 0644)
+	if err := os.WriteFile(s.objectPath(a), flipped, 0644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.Get(a); err == nil {
 		t.Fatal("bit flip must be detected")
 	}
 
 	rawB, _ := os.ReadFile(s.objectPath(b))
-	os.WriteFile(s.objectPath(a), rawB, 0644)
+	if err := os.WriteFile(s.objectPath(a), rawB, 0644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.Get(a); err == nil {
 		t.Fatal("a blob moved under another id must fail (AAD binds the id)")
 	}
 
 	flags := append([]byte(nil), rawB...)
 	flags[4] ^= flagGzip
-	os.WriteFile(s.objectPath(b), flags, 0644)
+	if err := os.WriteFile(s.objectPath(b), flags, 0644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.Get(b); err == nil {
 		t.Fatal("flipping the gzip flag must not yield silently wrong content")
 	}

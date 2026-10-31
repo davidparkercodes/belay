@@ -90,7 +90,9 @@ func TestConcurrentFirstOpenSharesOneKey(t *testing.T) {
 func corruptObject(t *testing.T, s *Store, id string) {
 	t.Helper()
 	p := s.objectPath(id)
-	os.Chmod(p, 0o644)
+	if err := os.Chmod(p, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(p, bytes.Repeat([]byte{0xAB}, 80), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +179,7 @@ func TestMigrationCleanupKeepsMappingUntilCopyVerifies(t *testing.T) {
 func filesUnder(t *testing.T, root string) map[string][]byte {
 	t.Helper()
 	out := map[string][]byte{}
-	filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+	err := filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return nil
 		}
@@ -185,6 +187,9 @@ func filesUnder(t *testing.T, root string) map[string][]byte {
 		out[p] = data
 		return nil
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	return out
 }
 
@@ -211,7 +216,9 @@ func TestMigrationTombstonesIDsOfCollectedLegacyObjects(t *testing.T) {
 		if e.FilePath == "src/file0.go" {
 			pruned = append(pruned, e.EventID)
 			if e.ContentHash != "" {
-				legacy.Delete(e.ContentHash)
+				if err := legacy.Delete(e.ContentHash); err != nil {
+					t.Fatal(err)
+				}
 			}
 		}
 	}
@@ -261,7 +268,9 @@ func TestMigrationTombstonesIDsOfCollectedLegacyObjects(t *testing.T) {
 	if missing != len(pruned) {
 		t.Fatalf("%d rebuilt events point at missing objects, want %d", missing, len(pruned))
 	}
-	ridx.Checkpoint()
+	if err := ridx.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
 	assertNoLegacyIDs(t, f.dir, f.legacyIDs)
 
 	prev := GCGracePeriod

@@ -88,7 +88,9 @@ func TestDaemonMigratesLegacyStoreWhileWriting(t *testing.T) {
 		}
 	}
 
-	d.logWriter.Sync()
+	if err := d.logWriter.Sync(); err != nil {
+		t.Fatal(err)
+	}
 	r, _ := eventlog.NewReader(d.cfg.EventsDir())
 	all, _ := r.ReadAll()
 	for _, e := range all {
