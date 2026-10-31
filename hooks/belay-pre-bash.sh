@@ -71,11 +71,16 @@ fi
 
 BELAY_BIN="${BELAY_BIN:-}"
 if [ -z "$BELAY_BIN" ]; then
+  BELAY_BIN=$(command -v belay 2>/dev/null || true)
+fi
+if [ -z "$BELAY_BIN" ]; then
   for candidate in \
     "$(dirname "$0")/../bin/belay" \
     "$HOME/go/bin/belay" \
+    "$HOME/.local/bin/belay" \
     "/usr/local/bin/belay" \
-    "/opt/homebrew/bin/belay"; do
+    "/opt/homebrew/bin/belay" \
+    "/home/linuxbrew/.linuxbrew/bin/belay"; do
     if [ -x "$candidate" ]; then
       BELAY_BIN="$candidate"
       break
