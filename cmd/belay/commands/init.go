@@ -515,8 +515,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	pid, startErr := startDaemonBackground(projectRoot)
-	if startErr != nil {
+	if os.Getenv("BELAY_NO_AUTOSTART") == "1" {
+		printStep("Daemon not started (BELAY_NO_AUTOSTART=1); run 'belay daemon start'", true)
+	} else if pid, startErr := autoStartLauncher(projectRoot); startErr != nil {
 		printStep(fmt.Sprintf("Start daemon: %v", startErr), false)
 	} else {
 		printStep(fmt.Sprintf("Daemon started (PID %d)", pid), true)
