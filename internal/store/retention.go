@@ -102,7 +102,7 @@ func GarbageCollect(idx *index.Index, objStore *Store, dryRun bool) (*GCResult, 
 
 	graceCutoff := time.Now().Add(-GCGracePeriod)
 	for _, hash := range hashes {
-		if !referenced[hash] {
+		if !referenced[hash] && !objStore.Pinned(hash) {
 			info, statErr := objStore.ObjectInfo(hash)
 			if statErr != nil {
 				continue
@@ -192,6 +192,13 @@ func (c *Compactor) RunCompaction() (*CompactionResult, error) {
 	result.EventsRemoved += purged
 	result.TierBreakdown["purged"] = purged
 
+	checkpointsPurged, err := c.purgeCheckpoints()
+	if err != nil {
+		return nil, fmt.Errorf("purge checkpoints: %w", err)
+	}
+	result.EventsRemoved += checkpointsPurged
+	result.TierBreakdown["checkpoints_purged"] = checkpointsPurged
+
 	archiveRemoved, err := c.compactArchive()
 	if err != nil {
 		return nil, fmt.Errorf("archive compaction: %w", err)
@@ -269,7 +276,7 @@ func (c *Compactor) RunCompaction() (*CompactionResult, error) {
 }
 
 // compactable reports whether an event may be removed by a tier compaction pass.
-// Checkpoints and session meta-events are never collapsed; only purge removes them.
+// Checkpoints and session meta-events are never collapsed; only the purge passes remove them.
 func compactable(e *schema.Event) bool {
 	return e.Op != schema.OpCheckpoint && e.FilePath != "" && e.FilePath != ".belay/sessions"
 }
@@ -360,6 +367,32 @@ func (c *Compactor) purge() (int, error) {
 		c.logf("belay: purged %d events older than %d days", deleted, c.retention.ArchiveDays)
 	}
 	return int(deleted), nil
+}
+
+// purgeCheckpoints deletes checkpoint markers older than the warm tier. Hook-driven
+// checkpoints arrive many times a day, and the file versions they point at have been
+// collapsed by then, so the markers can no longer restore anything.
+func (c *Compactor) purgeCheckpoints() (int, error) {
+	if c.retention.WarmDays <= 0 {
+		return 0, nil
+	}
+
+	warmCutoff := c.now.Add(-time.Duration(c.retention.WarmDays) * 24 * time.Hour)
+	events, err := c.idx.QueryEvents(&index.Query{
+		Until:      warmCutoff.UnixNano(),
+		Operations: []string{schema.OpCheckpoint.String()},
+		OrderDesc:  false,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("query old checkpoints: %w", err)
+	}
+
+	toDelete := make([]string, 0, len(events))
+	for _, e := range events {
+		toDelete = append(toDelete, e.EventID)
+	}
+
+	return c.deleteBatch(toDelete, "checkpoint", fmt.Sprintf("older than %d days", c.retention.WarmDays))
 }
 
 // compactArchive keeps only one snapshot per file per day for events in the archive tier

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -66,12 +67,64 @@ type Config struct {
 
 	Storage StorageConfig `toml:"storage"`
 
+	Store StoreConfig `toml:"store"`
+
 	Retention RetentionConfig `toml:"retention"`
 
 	API APIConfig `toml:"api"`
 
+	Projection ProjectionConfig `toml:"projection"`
+
 	Safety SafetyConfig `toml:"safety"`
+
+	Scrub ScrubConfig `toml:"scrub"`
 }
+
+const (
+	ScrubOff    = "off"
+	ScrubNotice = "notice"
+	ScrubAuto   = "auto"
+)
+
+// ScrubConfig controls redaction of credentials in AI agent session logs.
+// Mode "off" does nothing, "notice" reports findings in belay status, and "auto"
+// lets the daemon redact idle logs.
+type ScrubConfig struct {
+	Mode string `toml:"mode"`
+}
+
+// NormalizeScrubMode maps a configured mode to a known one. Unknown values fall
+// back to notice with ok = false, never an error.
+func NormalizeScrubMode(mode string) (normalized string, ok bool) {
+	switch m := strings.ToLower(strings.TrimSpace(mode)); m {
+	case ScrubOff, ScrubNotice, ScrubAuto:
+		return m, true
+	case "":
+		return ScrubNotice, true
+	default:
+		return ScrubNotice, false
+	}
+}
+
+// ProjectionConfig sets the defaults for `belay project`: which git ref receives
+// projection commits, which remote (if any) they sync with and push to, and
+// whether a working-tree reconcile snapshot follows every session projection.
+type ProjectionConfig struct {
+	Remote string `toml:"remote"`
+
+	Ref string `toml:"ref"`
+
+	BaseRef string `toml:"base_ref"`
+
+	WorkingTree bool `toml:"working_tree"`
+
+	HoldBackSecrets bool `toml:"hold_back_secrets"`
+}
+
+const (
+	DefaultProjectionRef     = "refs/heads/belay-history"
+	DefaultProjectionBaseRef = "HEAD"
+)
 
 // SafetyConfig controls destructive operation safeguards.
 type SafetyConfig struct {
@@ -111,6 +164,11 @@ type StorageConfig struct {
 	FsyncIntervalMs int `toml:"fsync_interval_ms"`
 
 	CompressionEnabled bool `toml:"compression_enabled"`
+}
+
+// StoreConfig controls how content objects are written to .belay/objects.
+type StoreConfig struct {
+	Encryption bool `toml:"encryption"`
 }
 
 // RetentionConfig holds tiered retention policy durations.
@@ -174,6 +232,9 @@ func DefaultConfig(projectRoot string) *Config {
 			FsyncIntervalMs:    100,
 			CompressionEnabled: true,
 		},
+		Store: StoreConfig{
+			Encryption: true,
+		},
 		Retention: RetentionConfig{
 			HotHours:     DefaultHotHours,
 			WarmDays:     DefaultWarmDays,
@@ -190,6 +251,15 @@ func DefaultConfig(projectRoot string) *Config {
 			Host:    "127.0.0.1",
 			Enabled: true,
 		},
+		Projection: ProjectionConfig{
+			Ref:             DefaultProjectionRef,
+			BaseRef:         DefaultProjectionBaseRef,
+			WorkingTree:     true,
+			HoldBackSecrets: true,
+		},
+		Scrub: ScrubConfig{
+			Mode: ScrubNotice,
+		},
 	}
 }
 
@@ -201,6 +271,11 @@ func (c *Config) EventsDir() string {
 // ObjectsDir returns the path to the content-addressable object store directory.
 func (c *Config) ObjectsDir() string {
 	return filepath.Join(c.BelayPath, "objects")
+}
+
+// StoreManifestPath returns the path to the content store manifest.
+func (c *Config) StoreManifestPath() string {
+	return filepath.Join(c.BelayPath, "store.json")
 }
 
 // StashesDir returns the path to the session stashes directory.
@@ -288,6 +363,12 @@ fsync_interval_ms = %d
 # Enable gzip compression for stored objects
 compression_enabled = %v
 
+[store]
+# Encrypt every stored object with the per-user Belay key (kept in the OS
+# keychain or a 0600 key file). Losing the key loses the history: back it up
+# with "belay key export". Turning this off later does not decrypt old objects.
+encryption = %v
+
 [retention]
 # Hours of full-fidelity retention (every event kept)
 hot_hours = %d
@@ -327,19 +408,44 @@ host = %q
 # Enable the embedded API server
 enabled = %v
 
+[projection]
+# Remote that belay project syncs with and pushes to ("" = local ref only)
+remote = %q
+
+# Git ref that receives projection commits
+ref = %q
+
+# Ref the projection branch is bootstrapped from when it does not exist yet
+base_ref = %q
+
+# Follow each session projection with a working-tree reconcile snapshot
+working_tree = %v
+
+# Leave files with likely credentials out of projection commits (see .belayallow)
+hold_back_secrets = %v
+
 [safety]
 # IMPORTANT: When false (default), all destructive commands run in dry-run mode.
 # Destructive commands: restore, commit, replay --output, snapshot --output
 # Set to true ONLY when you are confident Belay is working correctly.
 allow_writes = %v
+
+[scrub]
+# Credentials in AI agent session logs (for example Claude Code transcripts):
+# "off" = ignore, "notice" = one line in belay status, "auto" = the daemon
+# redacts idle logs. Originals are kept so "belay scrub --undo" restores them.
+mode = %q
 `,
 		c.Daemon.LogLevel, c.Daemon.LogMaxSizeMB, c.Daemon.LogMaxFiles, c.Daemon.ShutdownTimeoutSec,
 		c.Watcher.DebounceMs, c.Watcher.ExcludeHidden, c.Watcher.MaxFileSizeMB,
 		c.Storage.SegmentMaxBytes, c.Storage.FsyncMode, c.Storage.FsyncIntervalMs, c.Storage.CompressionEnabled,
+		c.Store.Encryption,
 		c.Retention.HotHours, c.Retention.WarmDays, c.Retention.ColdDays, c.Retention.ArchiveDays, c.Retention.MaxStorageGB,
 		c.Retention.CompactionIntervalMin, c.Retention.MaxVersionsPerFile, c.Retention.CompactSegments,
 		c.API.Port, c.API.Host, c.API.Enabled,
+		c.Projection.Remote, c.Projection.Ref, c.Projection.BaseRef, c.Projection.WorkingTree, c.Projection.HoldBackSecrets,
 		c.Safety.AllowWrites,
+		c.Scrub.Mode,
 	)
 }
 
@@ -388,11 +494,33 @@ func Load(projectRoot string) (*Config, error) {
 	cfg.ProjectRoot = projectRoot
 	cfg.BelayPath = filepath.Join(projectRoot, BelayDir)
 
+	if mode, ok := NormalizeScrubMode(cfg.Scrub.Mode); ok {
+		cfg.Scrub.Mode = mode
+	} else {
+		fmt.Fprintf(os.Stderr, "belay: unknown [scrub] mode %q in %s, using %q\n", cfg.Scrub.Mode, configPath, ScrubNotice)
+		cfg.Scrub.Mode = mode
+	}
+
 	return cfg, nil
 }
 
 func SameRoot(a, b string) bool {
-	return canonicalRoot(a) == canonicalRoot(b)
+	if canonicalRoot(a) == canonicalRoot(b) {
+		return true
+	}
+	return sameInode(a, b)
+}
+
+func sameInode(a, b string) bool {
+	ia, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	ib, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return ia.IsDir() && ib.IsDir() && os.SameFile(ia, ib)
 }
 
 func canonicalRoot(p string) string {

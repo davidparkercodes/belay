@@ -12,7 +12,8 @@ belay/
 │   └── commands/            # All CLI subcommands
 ├── internal/
 │   ├── schema/              # Event types, serialization, data model
-│   ├── store/               # Content-addressable object store (SHA-256)
+│   ├── store/               # Encrypted content-addressable object store + legacy migration
+│   ├── storekey/            # Per-user store key (OS keychain or 0600 key file)
 │   ├── eventlog/            # Append-only event log (segment files)
 │   ├── index/               # SQLite event index (WAL mode)
 │   ├── ignore/              # .belayignore pattern matching
@@ -41,12 +42,14 @@ go vet ./...
 ## Key Design Decisions
 
 - **Event Store:** Append-only log with segment files + SQLite index
-- **Object Store:** Content-addressable (SHA-256) with gzip compression
+- **Object Store:** Content-addressable, gzip then XChaCha20-Poly1305, keyed HMAC-SHA256 ids (`Store.ContentID`; never hash file content with `sha256` to compare against stored ids). Legacy SHA-256 objects stay readable and are migrated by `store.Migrator` (phases copy, remap, segments, cleanup; progress in the index). Tests must use `BELAY_KEY_FILE` or a `storekey.MemoryProvider`, never the real keychain
 - **Config:** TOML format at `.belay/config.toml`
 - **CLI:** Cobra command framework
 - **API:** net/http with SSE for real-time streaming (embedded in daemon)
 - **Session Detection:** Plugin architecture; Claude Code detector included
 - **File Watcher:** macOS uses FSEvents; Linux/Windows use fsnotify
+- **Git projection:** `internal/git` builds projection commits with plumbing only; `SyncRef` makes the remote the source of truth (fast-forward or replay local-only projections onto the remote tip) and `RunProjection` is the one job runner shared by the CLI and the daemon's single-worker projector queue (`internal/daemon/projector.go`, `POST /api/project`)
+- **Session linking:** process-detected sessions (`<tool>-pid-N`) are linked to the tool's own session id via `record`/`checkpoint` PIDs or `POST /api/sessions/link`; links live in session metadata (`linked_session_id`) and every session query expands through them (`index.ExpandSessions`)
 
 ## Event Schema (v1)
 
@@ -55,8 +58,8 @@ Each event captures:
 - `timestamp`: nanosecond precision UTC
 - `file_path`: relative to project root (empty string for `checkpoint` markers)
 - `operation`: create | modify | delete | rename | checkpoint
-- `content_hash`: SHA-256 of file content
-- `previous_hash`: SHA-256 of previous content
+- `content_hash`: content id of the file content (keyed HMAC-SHA256; SHA-256 in legacy stores)
+- `previous_hash`: content id of the previous content
 - `session_id`: nullable AI session identifier
 - `attribution`: method used (pid, temporal, heuristic, manual, hook)
 - `attribution_confidence`: 0.0--1.0

@@ -16,7 +16,10 @@
 #   session_id      - Claude Code session identifier
 #   cwd             - Current working directory
 #
-# Only triggers for Write, Edit, and NotebookEdit tools.
+# Write, Edit and NotebookEdit record the written file with exact attribution.
+# Every other hook event (SessionStart, a Bash tool use, ...) only links the
+# calling agent process to the session id, so writes the agent makes through a
+# shell are attributed to the same session as its editor writes.
 
 set -euo pipefail
 
@@ -33,7 +36,12 @@ except Exception:
     sys.exit(0)
 
 tool = p.get('tool_name', '')
+sid = p.get('session_id', '')
+cwd = p.get('cwd', '')
+
 if tool not in ('Write', 'Edit', 'NotebookEdit'):
+    if sid:
+        print(f'LINK\n\n{sid}\n{cwd}')
     sys.exit(0)
 
 # Get file path from tool_input
@@ -41,9 +49,6 @@ ti = p.get('tool_input', {})
 fp = ti.get('file_path', ti.get('notebook_path', ''))
 if not fp:
     sys.exit(0)
-
-sid = p.get('session_id', '')
-cwd = p.get('cwd', '')
 
 if not os.path.isabs(fp) and cwd:
     fp = os.path.join(cwd, fp)
@@ -54,13 +59,14 @@ if tool == 'Write':
 else:
     op = 'modify'
 
-print(f'{fp}\n{op}\n{sid}')
+print(f'{fp}\n{op}\n{sid}\n{cwd}')
 " "$PAYLOAD" 2>/dev/null) || exit 0
 
 # Parse the output
 FILE_PATH=$(echo "$PARSED" | sed -n '1p')
 OP=$(echo "$PARSED" | sed -n '2p')
 SESSION_ID=$(echo "$PARSED" | sed -n '3p')
+CWD=$(echo "$PARSED" | sed -n '4p')
 
 [ -z "$FILE_PATH" ] && exit 0
 
@@ -87,6 +93,14 @@ if [ -z "$BELAY_BIN" ]; then
 fi
 
 [ -z "$BELAY_BIN" ] && exit 0
+
+if [ "$FILE_PATH" = "LINK" ]; then
+  (
+    cd "${CWD:-.}" 2>/dev/null || exit 0
+    "$BELAY_BIN" sessions link "$SESSION_ID" --tool "claude-code" --quiet
+  ) &>/dev/null &
+  exit 0
+fi
 
 # Fire and forget -- don't block Claude Code
 "$BELAY_BIN" record "$FILE_PATH" \

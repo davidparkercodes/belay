@@ -4,7 +4,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/davidparkercodes/belay/internal/apiclient"
 	"github.com/davidparkercodes/belay/internal/config"
 	"github.com/davidparkercodes/belay/internal/daemon"
 )
@@ -49,17 +48,4 @@ func autoStartDaemon(cfg *config.Config) bool {
 		time.Sleep(200 * time.Millisecond)
 	}
 	return true
-}
-
-func waitForAPI(cfg *config.Config, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	var err error
-	for time.Now().Before(deadline) {
-		var health map[string]interface{}
-		if err = apiclient.New(cfg, time.Second).Get("/api/health", &health); err == nil {
-			return nil
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	return err
 }

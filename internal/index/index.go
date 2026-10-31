@@ -205,6 +205,11 @@ func (idx *Index) IndexEventBatch(events []struct {
 
 // QueryEvents returns events matching the given query filters, ordered by timestamp.
 func (idx *Index) QueryEvents(q *Query) ([]*schema.Event, error) {
+	if len(q.Sessions) > 0 {
+		expanded := *q
+		expanded.Sessions = idx.ExpandSessions(q.Sessions)
+		q = &expanded
+	}
 	where, args := buildWhereClause(q)
 
 	order := "ASC"
@@ -825,7 +830,7 @@ func (idx *Index) ActiveContentHashes() (map[string]bool, error) {
 	rows, err := idx.db.Query(`
 		SELECT DISTINCT content_hash FROM events WHERE content_hash != ''
 		UNION
-		SELECT DISTINCT previous_hash FROM events WHERE previous_hash != ''`)
+		SELECT DISTINCT previous_hash FROM events WHERE previous_hash != ''` + idx.migrationProtectedClause())
 	if err != nil {
 		return nil, fmt.Errorf("query active hashes: %w", err)
 	}

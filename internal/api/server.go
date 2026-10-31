@@ -22,6 +22,7 @@ import (
 	"github.com/davidparkercodes/belay/internal/config"
 	"github.com/davidparkercodes/belay/internal/conflict"
 	"github.com/davidparkercodes/belay/internal/dashboard"
+	gitbridge "github.com/davidparkercodes/belay/internal/git"
 	"github.com/davidparkercodes/belay/internal/index"
 	"github.com/davidparkercodes/belay/internal/replay"
 	"github.com/davidparkercodes/belay/internal/schema"
@@ -41,6 +42,13 @@ type WatcherHealthProvider interface {
 type CompactionProvider interface {
 	CompactionStatus() map[string]interface{}
 	RunCompactionNow(dryRun bool) (*store.CompactionResult, error)
+}
+
+// ProjectionProvider is implemented by the daemon when it runs the in-process
+// git projector; the API then accepts queued projection jobs.
+type ProjectionProvider interface {
+	EnqueueProjection(job gitbridge.ProjectionJob) (pending int, added bool)
+	ProjectionStatus() map[string]interface{}
 }
 
 // Server is the HTTP API server for querying events, sessions, and streaming real-time updates.
@@ -116,6 +124,9 @@ func (s *Server) Start() error {
 
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("POST /api/compact", s.handleCompact)
+	mux.HandleFunc("POST /api/project", s.handleProject)
+	mux.HandleFunc("GET /api/project/status", s.handleProjectStatus)
+	mux.HandleFunc("POST /api/sessions/link", s.handleSessionLink)
 
 	mux.HandleFunc("POST /api/record", s.handleRecord)
 	mux.HandleFunc("POST /api/checkpoint", s.handleCheckpoint)
@@ -611,6 +622,39 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result)
 }
 
+func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
+	pp, ok := s.watcherHealth.(ProjectionProvider)
+	if !ok || pp == nil {
+		writeError(w, http.StatusServiceUnavailable, "projector not available")
+		return
+	}
+	var job gitbridge.ProjectionJob
+	if err := json.NewDecoder(r.Body).Decode(&job); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if job.SessionID == "" && !job.WorkingTree {
+		writeError(w, http.StatusBadRequest, "session_id or working_tree is required")
+		return
+	}
+	pending, added := pp.EnqueueProjection(job)
+	writeJSON(w, map[string]interface{}{
+		"status":  "queued",
+		"added":   added,
+		"pending": pending,
+		"job":     job.String(),
+	})
+}
+
+func (s *Server) handleProjectStatus(w http.ResponseWriter, r *http.Request) {
+	pp, ok := s.watcherHealth.(ProjectionProvider)
+	if !ok || pp == nil {
+		writeError(w, http.StatusServiceUnavailable, "projector not available")
+		return
+	}
+	writeJSON(w, pp.ProjectionStatus())
+}
+
 func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 	cp, ok := s.watcherHealth.(CompactionProvider)
 	if !ok || cp == nil {
@@ -642,6 +686,56 @@ type RecordRequest struct {
 	Operation string `json:"operation"`
 	SessionID string `json:"session_id,omitempty"`
 	ToolName  string `json:"tool_name,omitempty"`
+	PID       int    `json:"pid,omitempty"`
+}
+
+// SessionLinkRequest ties an agent process to the tool's own session id so
+// process-attributed events resolve to that id.
+type SessionLinkRequest struct {
+	SessionID string `json:"session_id"`
+	PID       int    `json:"pid"`
+	ToolName  string `json:"tool_name,omitempty"`
+}
+
+// SessionLinker is implemented by the daemon to persist process-to-session links.
+type SessionLinker interface {
+	LinkSession(pid int, sessionID, toolName string) []session.AliasLink
+}
+
+func (s *Server) linkSession(pid int, sessionID, toolName string) []session.AliasLink {
+	if pid <= 0 || sessionID == "" {
+		return nil
+	}
+	if linker, ok := s.watcherHealth.(SessionLinker); ok && linker != nil {
+		return linker.LinkSession(pid, sessionID, toolName)
+	}
+	if s.registry != nil {
+		return s.registry.LinkAlias(pid, sessionID, toolName)
+	}
+	return nil
+}
+
+func (s *Server) handleSessionLink(w http.ResponseWriter, r *http.Request) {
+	var req SessionLinkRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if req.SessionID == "" || req.PID <= 0 {
+		writeError(w, http.StatusBadRequest, "session_id and pid are required")
+		return
+	}
+	links := s.linkSession(req.PID, req.SessionID, req.ToolName)
+	linked := make([]string, 0, len(links))
+	for _, l := range links {
+		linked = append(linked, l.ProcessSession)
+	}
+	writeJSON(w, map[string]interface{}{
+		"status":     "linked",
+		"session_id": req.SessionID,
+		"pid":        req.PID,
+		"linked":     linked,
+	})
 }
 
 func (s *Server) handleRecord(w http.ResponseWriter, r *http.Request) {
@@ -659,6 +753,7 @@ func (s *Server) handleRecord(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "file_path is required")
 		return
 	}
+	s.linkSession(req.PID, req.SessionID, req.ToolName)
 
 	op := schema.OpModify
 	if req.Operation != "" {
@@ -737,6 +832,7 @@ type CheckpointRequest struct {
 	Reason    string            `json:"reason,omitempty"`
 	SessionID string            `json:"session_id,omitempty"`
 	ToolName  string            `json:"tool_name,omitempty"`
+	PID       int               `json:"pid,omitempty"`
 	Metadata  map[string]string `json:"metadata,omitempty"`
 }
 
@@ -752,6 +848,7 @@ func (s *Server) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.linkSession(req.PID, req.SessionID, req.ToolName)
 	if req.Label == "" {
 		req.Label = "checkpoint at " + time.Now().Format("2006-01-02 15:04:05")
 	}

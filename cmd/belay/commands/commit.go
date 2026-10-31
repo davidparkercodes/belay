@@ -10,7 +10,6 @@ import (
 	"github.com/davidparkercodes/belay/internal/config"
 	"github.com/davidparkercodes/belay/internal/index"
 	"github.com/davidparkercodes/belay/internal/schema"
-	"github.com/davidparkercodes/belay/internal/store"
 
 	"github.com/spf13/cobra"
 )
@@ -61,7 +60,7 @@ func runCommit(cmd *cobra.Command, args []string) error {
 	}
 	defer idx.Close()
 
-	objStore, err := store.NewStore(cfg.ObjectsDir(), cfg.Storage.CompressionEnabled)
+	objStore, err := openStore(cfg)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}

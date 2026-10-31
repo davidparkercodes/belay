@@ -141,8 +141,8 @@ func (d *ClaudeDetector) detectFromSessionFiles() ([]*DetectedSession, error) {
 				continue
 			}
 
-			if filepath.Ext(sessEntry.Name()) == ".json" {
-				sessionID := strings.TrimSuffix(sessEntry.Name(), ".json")
+			if ext := filepath.Ext(sessEntry.Name()); ext == ".json" || ext == ".jsonl" {
+				sessionID := strings.TrimSuffix(sessEntry.Name(), ext)
 				info, _ := sessEntry.Info()
 				var modTime time.Time
 				if info != nil {

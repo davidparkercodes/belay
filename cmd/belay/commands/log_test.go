@@ -31,6 +31,7 @@ func TestLogCmd_Flags(t *testing.T) {
 		{"op", ""},
 		{"limit", "50"},
 		{"json", "false"},
+		{"short", "false"},
 	}
 
 	for _, tt := range tests {

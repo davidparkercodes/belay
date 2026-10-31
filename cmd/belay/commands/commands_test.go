@@ -401,7 +401,21 @@ func TestSessionsListCmd_Flags(t *testing.T) {
 		{"with-events", "true"},
 		{"all", "false"},
 		{"limit", "0"},
+		{"short", "false"},
 	})
+}
+
+func TestDisplaySessionID(t *testing.T) {
+	long := "0123456789abcdef0123456789abcdef"
+	if got := displaySessionID(long, false); got != long {
+		t.Errorf("full id = %q, want %q", got, long)
+	}
+	if got := displaySessionID(long, true); got != "0123456789abcdef..." {
+		t.Errorf("short id = %q, want %q", got, "0123456789abcdef...")
+	}
+	if got := displaySessionID("short-id", true); got != "short-id" {
+		t.Errorf("short flag on short id = %q, want unchanged", got)
+	}
 }
 
 func TestSessionsShowCmd_RequiresOneArg(t *testing.T) {
@@ -439,6 +453,9 @@ func TestSessionsActiveCmd_Flags(t *testing.T) {
 	}
 	if f.DefValue != "false" {
 		t.Errorf("--json default = %q, want %q", f.DefValue, "false")
+	}
+	if short := cmd.Flags().Lookup("short"); short == nil || short.DefValue != "false" {
+		t.Error("--short flag should be registered on sessions active with default false")
 	}
 }
 

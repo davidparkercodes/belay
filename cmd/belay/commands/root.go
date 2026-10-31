@@ -46,6 +46,8 @@ attribute every change.`,
 		newHookCmd(),
 		newGitHooksCmd(),
 		newServiceCmd(),
+		newKeyCmd(),
+		newScrubCmd(),
 	)
 
 	return cmd

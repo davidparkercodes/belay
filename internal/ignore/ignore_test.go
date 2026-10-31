@@ -563,3 +563,19 @@ func TestDSStore(t *testing.T) {
 		t.Error("expected subdir/.DS_Store to be ignored by defaults")
 	}
 }
+
+func TestNewMatcherFromLines(t *testing.T) {
+	m := NewMatcherFromLines([]string{"# comment", "", "fixtures/", "*.pem", "!keep.pem"})
+	cases := map[string]bool{
+		"fixtures/a.txt": true,
+		"src/key.pem":    true,
+		"keep.pem":       false,
+		"src/main.go":    false,
+		".belayignore":   false,
+	}
+	for path, want := range cases {
+		if got := m.ShouldIgnore(path); got != want {
+			t.Errorf("ShouldIgnore(%q) = %v, want %v", path, got, want)
+		}
+	}
+}

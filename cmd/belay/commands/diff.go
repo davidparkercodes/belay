@@ -52,7 +52,7 @@ func runDiff(cmd *cobra.Command, args []string) error {
 	}
 	defer idx.Close()
 
-	objStore, err := store.NewStore(cfg.ObjectsDir(), cfg.Storage.CompressionEnabled)
+	objStore, err := openStore(cfg)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}

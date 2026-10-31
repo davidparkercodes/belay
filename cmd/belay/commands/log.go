@@ -30,6 +30,7 @@ Similar to git log, but with AI session awareness.`,
 	cmd.Flags().String("op", "", "Filter by operation type (create, modify, delete, rename)")
 	cmd.Flags().Int("limit", 50, "Number of events to show")
 	cmd.Flags().Bool("json", false, "Output as JSON")
+	cmd.Flags().Bool("short", false, "Abbreviate session IDs to 12 characters")
 
 	return cmd
 }
@@ -42,6 +43,7 @@ func runLog(cmd *cobra.Command, args []string) error {
 	opFilter, _ := cmd.Flags().GetString("op")
 	limit, _ := cmd.Flags().GetInt("limit")
 	jsonOutput, _ := cmd.Flags().GetBool("json")
+	shortIDs, _ := cmd.Flags().GetBool("short")
 
 	projectRoot, err := config.FindProjectRoot()
 	if err != nil {
@@ -115,8 +117,8 @@ func runLog(cmd *cobra.Command, args []string) error {
 		if e.SessionID != "" {
 			color := sessionColor(e.SessionID)
 			sid := e.SessionID
-			if len(sid) > 12 {
-				sid = sid[:12]
+			if shortIDs {
+				sid = truncateStr(sid, 12)
 			}
 			sessionStr = fmt.Sprintf("\033[%sm%s\033[0m", color, sid)
 		}

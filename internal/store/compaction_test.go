@@ -403,7 +403,7 @@ func TestCompactor_CheckpointsNeverCollapsed(t *testing.T) {
 	idx, objStore, retention := newTestCompactorEnv(t)
 
 	now := time.Now()
-	baseTime := now.Add(-15 * 24 * time.Hour).Truncate(time.Hour)
+	baseTime := now.Add(-3 * 24 * time.Hour).Truncate(time.Hour)
 	for i := 0; i < 5; i++ {
 		insertEvent(t, idx, fmt.Sprintf("cp-%d", i), baseTime.Add(time.Duration(i)*time.Minute), "", "s1",
 			schema.OpCheckpoint, "", "")
@@ -417,6 +417,58 @@ func TestCompactor_CheckpointsNeverCollapsed(t *testing.T) {
 	}
 	if result.EventsRemoved != 0 {
 		t.Errorf("EventsRemoved = %d, want 0 (checkpoints are never compacted)", result.EventsRemoved)
+	}
+}
+
+func TestCompactor_PurgesCheckpointsOlderThanWarmTier(t *testing.T) {
+	idx, objStore, retention := newTestCompactorEnv(t)
+
+	now := time.Now()
+	insertEvent(t, idx, "cp-old-1", now.Add(-15*24*time.Hour), "", "s1", schema.OpCheckpoint, "", "")
+	insertEvent(t, idx, "cp-old-2", now.Add(-8*24*time.Hour), "", "s1", schema.OpCheckpoint, "", "")
+	insertEvent(t, idx, "cp-warm", now.Add(-3*24*time.Hour), "", "s1", schema.OpCheckpoint, "", "")
+	insertEvent(t, idx, "cp-hot", now.Add(-1*time.Hour), "", "s1", schema.OpCheckpoint, "", "")
+	insertEvent(t, idx, "mod-old", now.Add(-15*24*time.Hour), "file.go", "s1", schema.OpModify, "h1", "")
+
+	compactor := NewCompactor(idx, objStore, retention, false)
+	compactor.now = now
+	result, err := compactor.RunCompaction()
+	if err != nil {
+		t.Fatalf("RunCompaction: %v", err)
+	}
+
+	if got := result.TierBreakdown["checkpoints_purged"]; got != 2 {
+		t.Errorf("checkpoints_purged = %d, want 2", got)
+	}
+	for _, id := range []string{"cp-old-1", "cp-old-2"} {
+		if _, err := idx.GetEvent(id); err == nil {
+			t.Errorf("checkpoint %s should have been purged", id)
+		}
+	}
+	for _, id := range []string{"cp-warm", "cp-hot", "mod-old"} {
+		if _, err := idx.GetEvent(id); err != nil {
+			t.Errorf("event %s should have been kept: %v", id, err)
+		}
+	}
+}
+
+func TestCompactor_PurgeCheckpoints_DryRun(t *testing.T) {
+	idx, objStore, retention := newTestCompactorEnv(t)
+
+	now := time.Now()
+	insertEvent(t, idx, "cp-old", now.Add(-15*24*time.Hour), "", "s1", schema.OpCheckpoint, "", "")
+
+	compactor := NewCompactor(idx, objStore, retention, true)
+	compactor.now = now
+	result, err := compactor.RunCompaction()
+	if err != nil {
+		t.Fatalf("RunCompaction: %v", err)
+	}
+	if got := result.TierBreakdown["checkpoints_purged"]; got != 1 {
+		t.Errorf("dry-run checkpoints_purged = %d, want 1", got)
+	}
+	if _, err := idx.GetEvent("cp-old"); err != nil {
+		t.Errorf("dry run must not delete: %v", err)
 	}
 }
 

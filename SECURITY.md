@@ -27,5 +27,8 @@ Alternatively, use [GitHub Security Advisories](https://github.com/davidparkerco
 ## Security Considerations
 
 - **No authentication:** The API has no auth tokens or API keys. Security relies on binding to `127.0.0.1` (the default). Do not expose Belay's API port to untrusted networks.
-- **File content storage:** Belay stores full file contents in a content-addressable store. Sensitive files (secrets, credentials) should be excluded via `.belayignore`.
+- **File content storage:** Belay stores full file contents in a content-addressable store under `.belay/objects/`. Every object is encrypted with XChaCha20-Poly1305 under a per-user key, and objects are addressed by keyed HMAC-SHA256 ids so the index cannot confirm a guessed value. Excluding sensitive files via `.belayignore` is still good practice.
+- **What encryption at rest protects:** backups, cloud sync, copied or stolen disks, and other programs that scan plain text on disk (search indexers, secret scanners, AI agents reading a home directory).
+- **What it does not protect:** malware or anyone running as the same user, who can read the OS keychain or the `0600` key file, and the local API, which serves decrypted content to local callers. Session stashes under `.belay/stashes/` are plain file copies and are not encrypted.
+- **Key loss:** losing the key loses the history; there is no recovery. Back it up with `belay key export`.
 - **CORS policy:** The API restricts cross-origin requests to `localhost` and `127.0.0.1` origins only.

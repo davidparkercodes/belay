@@ -114,6 +114,20 @@ func (w *Writer) Close() error {
 	return nil
 }
 
+// Rotate seals the active segment and starts a new one. An empty active segment is kept.
+func (w *Writer) Rotate() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.currentFile != nil && w.currentSize == 0 {
+		return nil
+	}
+	// A same-second rotation gets a "-N" suffix that sorts before the original, so wait for the next second.
+	if now := time.Now(); strings.HasPrefix(w.currentSegment, now.Format(segmentFormat)) {
+		time.Sleep(time.Until(now.Truncate(time.Second).Add(time.Second)))
+	}
+	return w.rotateSegment()
+}
+
 // CurrentSegment returns the filename of the currently active segment.
 func (w *Writer) CurrentSegment() string {
 	w.mu.Lock()

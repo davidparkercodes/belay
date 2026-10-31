@@ -25,6 +25,7 @@ type projectHealth struct {
 	APIPort       int    `json:"api_port"`
 	APIError      string `json:"api_error,omitempty"`
 	Spooled       int    `json:"spooled_events"`
+	SpoolBad      int    `json:"spool_set_aside,omitempty"`
 }
 
 func (h projectHealth) Healthy() bool {
@@ -36,6 +37,9 @@ func checkProject(cfg *config.Config) projectHealth {
 	h.DaemonRunning, h.DaemonPID = daemon.IsRunning(cfg)
 	if pending, err := spool.Pending(cfg.SpoolDir()); err == nil {
 		h.Spooled = len(pending)
+	}
+	if bad, err := spool.Bad(cfg.SpoolDir()); err == nil {
+		h.SpoolBad = len(bad)
 	}
 
 	client := apiclient.New(cfg, time.Second)

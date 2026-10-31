@@ -42,6 +42,7 @@ Safe to run multiple times (idempotent).`,
 
 	cmd.Flags().Bool("force", false, "Reinitialize even if .belay/ exists")
 	cmd.Flags().BoolP("non-interactive", "y", false, "Skip wizard, use defaults (for CI/scripts)")
+	cmd.Flags().String("scrub", "", `Agent log scrub mode: "off", "notice" (default) or "auto"; skips the wizard question`)
 
 	return cmd
 }
@@ -52,7 +53,7 @@ func detectProjectTypes(projectRoot string) []projectType {
 			Name: "Node.js",
 			Patterns: []string{
 				"node_modules/", "dist/", ".next/", ".nuxt/", ".vite/",
-				".turbo/", "out/", ".cache/", "coverage/",
+				".turbo/", "out/", ".cache/", "coverage/", "*.tsbuildinfo",
 			},
 		},
 		{
@@ -65,7 +66,7 @@ func detectProjectTypes(projectRoot string) []projectType {
 			Name: "Python",
 			Patterns: []string{
 				"__pycache__/", ".venv/", "*.pyc", "*.pyo",
-				".mypy_cache/", ".pytest_cache/", "*.egg-info/",
+				".mypy_cache/", ".pytest_cache/", ".ruff_cache/", "*.egg-info/",
 			},
 		},
 		{
@@ -330,6 +331,18 @@ func printCommand(cmd string) {
 func runInit(cmd *cobra.Command, args []string) error {
 	force, _ := cmd.Flags().GetBool("force")
 	nonInteractive, _ := cmd.Flags().GetBool("non-interactive")
+	scrubFlag, _ := cmd.Flags().GetString("scrub")
+	scrubMode := config.ScrubNotice
+	if scrubFlag != "" {
+		mode, ok := config.NormalizeScrubMode(scrubFlag)
+		if !ok {
+			return fmt.Errorf(`invalid --scrub %q (use "off", "notice" or "auto")`, scrubFlag)
+		}
+		scrubMode = mode
+	}
+	if !stdinIsTerminal() {
+		nonInteractive = true
+	}
 
 	projectRoot, err := os.Getwd()
 	if err != nil {
@@ -372,6 +385,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	autoStartDaemon := true
 	claudeCodeIntegration := true
 	installGitHooks := hasGit
+	scrubAuto := false
 
 	if !nonInteractive {
 		var detectionLabel string
@@ -419,6 +433,18 @@ func runInit(cmd *cobra.Command, args []string) error {
 			)
 		}
 
+		if scrubFlag == "" {
+			fields = append(fields,
+				huh.NewConfirm().
+					Title("Automatically redact credentials from AI session logs? [y/N]").
+					Description("Rewrites idle agent transcripts with [redacted:<rule>]; originals stay in Belay's encrypted store (belay scrub --undo). No: belay status only mentions them.").
+					Value(&scrubAuto).
+					WithButtonAlignment(lipgloss.Left).
+					Affirmative("Yes").
+					Negative("No"),
+			)
+		}
+
 		form := huh.NewForm(
 			huh.NewGroup(fields...),
 		).WithTheme(belayTheme())
@@ -449,11 +475,14 @@ func runInit(cmd *cobra.Command, args []string) error {
 	printStep("Created .belay/ directory", true)
 
 	cfg := config.DefaultConfig(projectRoot)
+	cfg.Scrub.Mode = initScrubMode(scrubMode, scrubFlag != "", scrubAuto)
 	configContent := cfg.ToTOML()
 	if err := os.WriteFile(cfg.ConfigPath(), []byte(configContent), 0644); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
 	printStep("Wrote config.toml", true)
+	printStepDetail("Store encryption on", "("+keyLossWarning+")")
+	printStepDetail("Agent log scrub: "+cfg.Scrub.Mode, "([scrub] mode in config.toml)")
 
 	ignoreContent := buildIgnoreContent(detectedTypes, useRecommendedIgnore)
 	ignorePath := filepath.Join(projectRoot, ".belayignore")
@@ -554,6 +583,7 @@ vendor/
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
 
 # Build artifacts
 build/
@@ -575,11 +605,17 @@ bin/
 .DS_Store
 Thumbs.db
 
-# Frontend build caches
+# Build and tool caches
 .next/
 .nuxt/
 .vite/
 .turbo/
+.cache/
+coverage/
+*.tsbuildinfo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # Logs
 *.log
@@ -635,4 +671,22 @@ func splitLines(s string) []string {
 		lines = append(lines, s[start:])
 	}
 	return lines
+}
+
+func initScrubMode(flagMode string, flagSet, answeredYes bool) string {
+	if flagSet {
+		return flagMode
+	}
+	if answeredYes {
+		return config.ScrubAuto
+	}
+	return config.ScrubNotice
+}
+
+func stdinIsTerminal() bool {
+	info, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
 }

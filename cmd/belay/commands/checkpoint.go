@@ -9,6 +9,9 @@ import (
 
 	"github.com/davidparkercodes/belay/internal/apiclient"
 	"github.com/davidparkercodes/belay/internal/config"
+	"github.com/davidparkercodes/belay/internal/schema"
+	"github.com/davidparkercodes/belay/internal/session"
+	"github.com/davidparkercodes/belay/internal/spool"
 
 	"github.com/spf13/cobra"
 )
@@ -42,6 +45,7 @@ type checkpointRequest struct {
 	Reason    string            `json:"reason,omitempty"`
 	SessionID string            `json:"session_id,omitempty"`
 	ToolName  string            `json:"tool_name,omitempty"`
+	PID       int               `json:"pid,omitempty"`
 	Metadata  map[string]string `json:"metadata,omitempty"`
 }
 
@@ -75,6 +79,9 @@ func runCheckpoint(cmd *cobra.Command, args []string) error {
 		SessionID: sessionID,
 		ToolName:  toolName,
 	}
+	if sessionID != "" {
+		req.PID = session.CallerAgentPID()
+	}
 
 	var out checkpointResponse
 	err = apiclient.New(cfg, 2*time.Second).PostJSON("/api/checkpoint", &req, &out)
@@ -83,17 +90,18 @@ func runCheckpoint(cmd *cobra.Command, args []string) error {
 		if !errors.As(err, &mismatch) && !apiclient.IsUnreachable(err) {
 			return err
 		}
-		if !autoStartDaemon(cfg) {
-			if mismatch != nil {
-				return fmt.Errorf("%w; restart this project's daemon with `belay daemon restart`", mismatch)
-			}
-			return fmt.Errorf("daemon not reachable (start it with `belay daemon start`): %w", err)
-		}
-		if err := waitForAPI(cfg, autoStartWait); err != nil {
-			return fmt.Errorf("daemon started but API not ready: %w", err)
-		}
-		if err := apiclient.New(cfg, 2*time.Second).PostJSON("/api/checkpoint", &req, &out); err != nil {
+		out, err = spoolCheckpoint(cfg, &req)
+		if err != nil {
 			return err
+		}
+		reason := "daemon not reachable"
+		if mismatch != nil {
+			reason = mismatch.Error()
+		}
+		if autoStartDaemon(cfg) {
+			fmt.Fprintf(os.Stderr, "belay: %s; checkpoint queued and daemon started for %s\n", reason, projectRoot)
+		} else {
+			fmt.Fprintf(os.Stderr, "belay: %s; checkpoint queued in %s until the daemon runs\n", reason, cfg.SpoolDir())
 		}
 	}
 
@@ -111,4 +119,44 @@ func runCheckpoint(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintf(os.Stdout, "\nRestore with: belay restore --to-checkpoint %s --all --execute\n", out.EventID)
 	return nil
+}
+
+// spoolCheckpoint mirrors the API's checkpoint event so a hook never waits on a daemon start.
+func spoolCheckpoint(cfg *config.Config, req *checkpointRequest) (checkpointResponse, error) {
+	label := req.Label
+	if label == "" {
+		label = "checkpoint at " + time.Now().Format("2006-01-02 15:04:05")
+	}
+	if len(label) > 256 {
+		label = label[:256]
+	}
+	metadata := map[string]string{
+		"source": "checkpoint",
+		"label":  label,
+	}
+	if req.Reason != "" {
+		metadata["reason"] = req.Reason
+	}
+	if req.ToolName != "" {
+		metadata["tool_name"] = req.ToolName
+	}
+	for k, v := range req.Metadata {
+		if _, exists := metadata[k]; !exists {
+			metadata[k] = v
+		}
+	}
+	event := &schema.Event{
+		EventID:               schema.NewEventID(),
+		Version:               schema.SchemaVersion,
+		Op:                    schema.OpCheckpoint,
+		SessionID:             req.SessionID,
+		Attribution:           schema.AttrManual,
+		AttributionConfidence: 1.0,
+		Metadata:              metadata,
+	}
+	event.SetTimestamp(time.Now())
+	if err := spool.Write(cfg.SpoolDir(), event); err != nil {
+		return checkpointResponse{}, fmt.Errorf("queue checkpoint: %w", err)
+	}
+	return checkpointResponse{Status: "queued", EventID: event.EventID, Label: label, TimestampNano: event.TimestampNano}, nil
 }

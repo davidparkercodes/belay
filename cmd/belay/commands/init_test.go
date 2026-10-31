@@ -492,6 +492,13 @@ func TestDefaultBelayIgnore(t *testing.T) {
 		"node_modules/",
 		"__pycache__/",
 		".DS_Store",
+		"*.tsbuildinfo",
+		"coverage/",
+		".cache/",
+		".pytest_cache/",
+		".mypy_cache/",
+		".ruff_cache/",
+		"*.egg-info/",
 	}
 
 	for _, pattern := range requiredPatterns {

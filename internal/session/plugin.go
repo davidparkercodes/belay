@@ -53,6 +53,9 @@ type Registry struct {
 	onSessionStart func(session *schema.Session)
 	onSessionEnd   func(session *schema.Session)
 
+	aliasByPID map[int]string
+	aliasOf    map[string]string
+
 	done chan struct{}
 	wg   sync.WaitGroup
 }
@@ -175,6 +178,7 @@ func (r *Registry) Attribute(event *FileWriteEvent) (sessionID string, confidenc
 	// If a pending session gets attributed an event, confirm it immediately
 	if bestSession != "" {
 		r.confirmSession(bestSession)
+		bestSession = r.ResolveAlias(bestSession)
 	}
 
 	return bestSession, bestConfidence, bestMethod
@@ -278,11 +282,15 @@ func (r *Registry) poll() {
 				StartedAt:        detected.StartedAt,
 				Metadata:         detected.Metadata,
 			}
-			r.sessions[id] = &trackedSession{
+			ts := &trackedSession{
 				session:   session,
 				detected:  detected,
 				lastSeen:  now,
 				confirmed: false,
+			}
+			r.sessions[id] = ts
+			if alias := r.aliasForPIDLocked(detected.PID); alias != "" && alias != id {
+				r.applyAliasLocked(ts, alias)
 			}
 		} else {
 			r.sessions[id].lastSeen = now

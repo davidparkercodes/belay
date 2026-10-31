@@ -25,12 +25,14 @@ func newSessionsCmd() *cobra.Command {
 	cmd.Flags().Bool("with-events", true, "Only show sessions that have at least 1 event (default: true)")
 	cmd.Flags().Bool("all", false, "Show all sessions including those with 0 events")
 	cmd.Flags().Int("limit", 0, "Maximum number of sessions to return (0 = no limit)")
+	cmd.Flags().Bool("short", false, "Abbreviate session IDs to 16 characters")
 
 	cmd.AddCommand(
 		newSessionsListCmd(),
 		newSessionsShowCmd(),
 		newSessionsActiveCmd(),
 		newSessionsLabelCmd(),
+		newSessionsLinkCmd(),
 	)
 
 	return cmd
@@ -47,6 +49,7 @@ func newSessionsListCmd() *cobra.Command {
 	cmd.Flags().Bool("with-events", true, "Only show sessions that have at least 1 event (default: true)")
 	cmd.Flags().Bool("all", false, "Show all sessions including those with 0 events")
 	cmd.Flags().Int("limit", 0, "Maximum number of sessions to return (0 = no limit)")
+	cmd.Flags().Bool("short", false, "Abbreviate session IDs to 16 characters")
 	return cmd
 }
 
@@ -56,6 +59,7 @@ func runSessionsList(cmd *cobra.Command, args []string) error {
 	withEvents, _ := cmd.Flags().GetBool("with-events")
 	showAll, _ := cmd.Flags().GetBool("all")
 	limit, _ := cmd.Flags().GetInt("limit")
+	shortIDs, _ := cmd.Flags().GetBool("short")
 
 	minEvents := 0
 	if withEvents && !showAll {
@@ -117,10 +121,7 @@ func runSessionsList(cmd *cobra.Command, args []string) error {
 			label = "-"
 		}
 
-		sid := s.SessionID
-		if len(sid) > 16 {
-			sid = sid[:16] + "..."
-		}
+		sid := displaySessionID(s.SessionID, shortIDs)
 
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%d\t%s\n",
 			sid, s.ToolName, status,
@@ -222,11 +223,13 @@ func newSessionsActiveCmd() *cobra.Command {
 		RunE:  runSessionsActive,
 	}
 	cmd.Flags().Bool("json", false, "Output as JSON")
+	cmd.Flags().Bool("short", false, "Abbreviate session IDs to 16 characters")
 	return cmd
 }
 
 func runSessionsActive(cmd *cobra.Command, args []string) error {
 	jsonOutput, _ := cmd.Flags().GetBool("json")
+	shortIDs, _ := cmd.Flags().GetBool("short")
 
 	projectRoot, err := config.FindProjectRoot()
 	if err != nil {
@@ -276,10 +279,7 @@ func runSessionsActive(cmd *cobra.Command, args []string) error {
 			label = "-"
 		}
 
-		sid := s.SessionID
-		if len(sid) > 16 {
-			sid = sid[:16] + "..."
-		}
+		sid := displaySessionID(s.SessionID, shortIDs)
 
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%d\t%s\n",
 			sid, s.ToolName, status,
@@ -322,4 +322,11 @@ func newSessionsLabelCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func displaySessionID(id string, short bool) string {
+	if !short || len(id) <= 16 {
+		return id
+	}
+	return id[:16] + "..."
 }

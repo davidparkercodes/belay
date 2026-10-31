@@ -16,6 +16,7 @@ import (
 	"github.com/davidparkercodes/belay/internal/api"
 	"github.com/davidparkercodes/belay/internal/config"
 	"github.com/davidparkercodes/belay/internal/eventlog"
+	gitbridge "github.com/davidparkercodes/belay/internal/git"
 	"github.com/davidparkercodes/belay/internal/ignore"
 	"github.com/davidparkercodes/belay/internal/index"
 	"github.com/davidparkercodes/belay/internal/schema"
@@ -28,38 +29,46 @@ import (
 // Daemon is the main Belay process that watches for file changes, attributes them
 // to AI sessions, and persists events to the log and index.
 type Daemon struct {
-	cfg          *config.Config
-	version      string
-	objStore     *store.Store
-	logWriter    *eventlog.Writer
-	idx          *index.Index
-	matcher      *ignore.Matcher
-	watcher      *watcher.Watcher
-	registry     *session.Registry
-	apiServer    *api.Server
-	logger       *log.Logger
-	sessionFilesMu sync.RWMutex
-	sessionFiles   map[string]map[string]bool
-	stopCheckpoint  chan struct{}
-	checkpointDone  chan struct{}
-	stopCleanup     chan struct{}
-	cleanupDone     chan struct{}
-	stopCompaction  chan struct{}
-	compactionDone  chan struct{}
-	stopSpool       chan struct{}
-	spoolDone       chan struct{}
-	stopWatchdog    chan struct{}
-	watchdogDone    chan struct{}
+	cfg              *config.Config
+	version          string
+	objStore         *store.Store
+	logWriter        *eventlog.Writer
+	idx              *index.Index
+	matcher          *ignore.Matcher
+	watcher          *watcher.Watcher
+	registry         *session.Registry
+	apiServer        *api.Server
+	projector        *projector
+	logger           *log.Logger
+	sessionFilesMu   sync.RWMutex
+	sessionFiles     map[string]map[string]bool
+	stopCheckpoint   chan struct{}
+	checkpointDone   chan struct{}
+	stopCleanup      chan struct{}
+	cleanupDone      chan struct{}
+	stopCompaction   chan struct{}
+	compactionDone   chan struct{}
+	stopSpool        chan struct{}
+	spoolDone        chan struct{}
+	stopWatchdog     chan struct{}
+	watchdogDone     chan struct{}
 	watchdogRestarts int
-	burst          *burstDetector
-	pidLock        *pidLock
-	logFile        *rotatingFile
+	burst            *burstDetector
+	pidLock          *pidLock
+	logFile          *rotatingFile
+
+	eventMu       sync.Mutex
+	stopMigration chan struct{}
+	migrationDone chan struct{}
 
 	compactionMu      sync.Mutex
 	compactionRunning bool
 	lastCompactionAt  time.Time
 	lastCompaction    *store.CompactionResult
 	lastCompactionErr string
+
+	stopScrub chan struct{}
+	scrubDone chan struct{}
 }
 
 // compactionStartupSettle is how long after startup the first compaction check waits,
@@ -70,6 +79,8 @@ const compactionStartupSettle = 2 * time.Minute
 // configured interval. A short poll (rather than one long ticker) is what makes the
 // schedule survive laptop sleep and daemon restarts.
 const compactionPoll = time.Minute
+
+const duplicateEventWindow = 10 * time.Second
 
 // New creates a new Daemon with the given configuration.
 func New(cfg *config.Config, version string) (*Daemon, error) {
@@ -93,16 +104,27 @@ func New(cfg *config.Config, version string) (*Daemon, error) {
 func (d *Daemon) Run() error {
 	d.logger.Println("starting Belay daemon...")
 
-	if err := d.init(); err != nil {
-		return fmt.Errorf("init: %w", err)
-	}
+	sigCh := shutdownSignalChannel()
 
 	lock, err := acquirePIDLock(d.cfg.PIDPath())
 	if err != nil {
-		d.cleanup()
 		return err
 	}
 	d.pidLock = lock
+
+	if err := d.waitForStore(sigCh, storeRetryInterval); err != nil {
+		d.pidLock.Release()
+		if errors.Is(err, errShutdownWhileLocked) {
+			return nil
+		}
+		return fmt.Errorf("init: %w", err)
+	}
+
+	if err := d.init(); err != nil {
+		d.pidLock.Release()
+		d.cleanup()
+		return fmt.Errorf("init: %w", err)
+	}
 
 	d.registry.Start()
 
@@ -112,11 +134,15 @@ func (d *Daemon) Run() error {
 		return fmt.Errorf("start watcher: %w", err)
 	}
 
+	d.projector = newProjector(d)
+	d.projector.Start()
+
 	d.apiServer = api.New(d.cfg, d.idx, d.objStore, d.registry, d.logger, d.HandleRecordedEvent, d.version, d)
 	if err := d.apiServer.Start(); err != nil {
 		d.logger.Printf("warning: API server failed to start: %v", err)
 	}
 
+	d.requeueBadSpool()
 	d.drainSpool()
 	d.stopSpool = make(chan struct{})
 	d.spoolDone = make(chan struct{})
@@ -126,13 +152,10 @@ func (d *Daemon) Run() error {
 	d.watchdogDone = make(chan struct{})
 	go d.runWatchdog()
 
+	d.startMigration()
+
 	d.logger.Printf("daemon running (PID %d), watching %s", os.Getpid(), d.cfg.ProjectRoot)
 	d.logger.Printf("session detectors: %v", d.registry.DetectorNames())
-
-	// Use a buffered channel so the second signal is not lost even if we are
-	// busy in the select below. signalChannel registers both SIGINT and SIGTERM;
-	// the channel has capacity 2 so the first and second signals are queued.
-	sigCh := shutdownSignalChannel()
 
 	// Block until the first shutdown signal.
 	sig := <-sigCh
@@ -171,9 +194,11 @@ func (d *Daemon) Run() error {
 func (d *Daemon) init() error {
 	var err error
 
-	d.objStore, err = store.NewStore(d.cfg.ObjectsDir(), d.cfg.Storage.CompressionEnabled)
-	if err != nil {
-		return fmt.Errorf("init object store: %w", err)
+	if d.objStore == nil {
+		d.objStore, err = store.OpenConfig(d.cfg)
+		if err != nil {
+			return fmt.Errorf("init object store: %w", err)
+		}
 	}
 
 	d.logWriter, err = eventlog.NewWriter(d.cfg.EventsDir(), d.cfg.Storage.SegmentMaxBytes)
@@ -270,6 +295,8 @@ func (d *Daemon) init() error {
 		d.sessionFilesMu.Unlock()
 	})
 
+	d.seedSessionAliases()
+
 	d.burst = newBurstDetector(func(event *schema.Event) {
 		d.processEvent(event)
 	})
@@ -296,6 +323,8 @@ func (d *Daemon) init() error {
 	d.stopCompaction = make(chan struct{})
 	d.compactionDone = make(chan struct{})
 	go d.runCompactionLoop()
+
+	d.startScrubLoop()
 
 	return nil
 }
@@ -324,9 +353,21 @@ func (d *Daemon) handleEvent(event *schema.Event) {
 }
 
 func (d *Daemon) processEvent(event *schema.Event) {
-	if event.PreviousHash == "" && event.Op != schema.OpCreate && event.Op != schema.OpCheckpoint && event.FilePath != "" {
-		if prev, err := d.idx.LatestEvent(event.FilePath); err == nil && prev != nil {
-			event.PreviousHash = prev.ContentHash
+	d.eventMu.Lock()
+	defer d.eventMu.Unlock()
+	d.processEventLocked(event)
+}
+
+func (d *Daemon) processEventLocked(event *schema.Event) {
+	if event.FilePath != "" && event.Op != schema.OpCheckpoint {
+		prev, err := d.idx.LatestEvent(event.FilePath)
+		if err == nil && prev != nil {
+			if d.isDuplicateEvent(event, prev) {
+				return
+			}
+			if event.PreviousHash == "" && event.Op != schema.OpCreate {
+				event.PreviousHash = prev.ContentHash
+			}
 		}
 	}
 
@@ -343,6 +384,9 @@ func (d *Daemon) processEvent(event *schema.Event) {
 
 	if event.SessionID != "" {
 		s := d.registry.GetSession(event.SessionID)
+		if s == nil {
+			s, _ = d.idx.GetSession(event.SessionID)
+		}
 		if s == nil {
 			toolName := "unknown"
 			if event.Metadata != nil {
@@ -379,6 +423,50 @@ func (d *Daemon) processEvent(event *schema.Event) {
 			},
 		})
 	}
+}
+
+// The watcher and a tool hook both report the same write: identical content, same
+// session, moments apart. Keeping one copy is enough for history and keeps event
+// counts honest.
+func (d *Daemon) isDuplicateEvent(event, prev *schema.Event) bool {
+	if event.ContentHash == "" || event.ContentHash != prev.ContentHash {
+		return false
+	}
+	if !sameWriteClass(event.Op, prev.Op) || event.SessionID == "" || event.SessionID != prev.SessionID {
+		return false
+	}
+	delta := event.TimestampNano - prev.TimestampNano
+	if delta < 0 {
+		delta = -delta
+	}
+	return delta <= duplicateEventWindow.Nanoseconds()
+}
+
+// The watcher reports a brand-new file as MODIFY when the kernel coalesces its
+// create and write, while the hook says CREATE; both describe the same write.
+func sameWriteClass(a, b schema.Operation) bool {
+	isWrite := func(op schema.Operation) bool { return op == schema.OpCreate || op == schema.OpModify }
+	return a == b || (isWrite(a) && isWrite(b))
+}
+
+func (d *Daemon) LinkSession(pid int, sessionID, toolName string) []session.AliasLink {
+	links := d.registry.LinkAlias(pid, sessionID, toolName)
+	for _, l := range links {
+		if err := d.idx.SetSessionMetadata(l.ProcessSession, session.LinkedSessionKey, l.SessionID); err != nil {
+			d.logger.Printf("warning: persist session link %s -> %s: %v", l.ProcessSession, l.SessionID, err)
+			continue
+		}
+		d.logger.Printf("session %s (PID %d) linked to %s", l.ProcessSession, l.PID, l.SessionID)
+	}
+	return links
+}
+
+func (d *Daemon) seedSessionAliases() {
+	sessions, err := d.idx.ListSessions(true, 0, 0)
+	if err != nil {
+		return
+	}
+	d.registry.SeedAliases(sessions)
 }
 
 func (d *Daemon) sessionHasFile(sessionID, filePath string) bool {
@@ -423,7 +511,8 @@ func (d *Daemon) runSpoolLoop() {
 }
 
 func (d *Daemon) drainSpool() {
-	n, err := spool.Drain(d.cfg.SpoolDir(), d.processEvent)
+	d.publishSpoolRecipient()
+	n, err := spool.DrainEntries(d.cfg.SpoolDir(), d.ingestSpooled)
 	if err != nil {
 		d.logger.Printf("warning: spool drain failed: %v", err)
 		return
@@ -452,6 +541,10 @@ func (d *Daemon) runCheckpointLoop() {
 		}
 	}
 }
+
+// hookSessionIdleTimeout is how long a session with no owning process (one created by hook
+// records) may go without a new event before cleanup closes it.
+const hookSessionIdleTimeout = 30 * time.Minute
 
 func (d *Daemon) runSessionCleanupLoop() {
 	defer close(d.cleanupDone)
@@ -483,27 +576,29 @@ func (d *Daemon) cleanupStaleSessions() {
 	cleaned := 0
 	for _, s := range active {
 		if s.PID == 0 {
-			if err := d.idx.MarkSessionCrashed(s.SessionID, now); err != nil {
-				d.logger.Printf("[SESSION-CLEANUP] error marking PID-0 session %s: %v", s.SessionID, err)
+			last, err := d.idx.SessionLastActivity(s.SessionID)
+			if err != nil {
+				d.logger.Printf("[SESSION-CLEANUP] error reading activity for session %s: %v", s.SessionID, err)
 				continue
 			}
-			cleaned++
-		} else if !isProcessAlive(s.PID) {
-			if err := d.idx.MarkSessionCrashed(s.SessionID, now); err != nil {
-				d.logger.Printf("[SESSION-CLEANUP] error marking session %s: %v", s.SessionID, err)
+			if now.Sub(last) < hookSessionIdleTimeout {
 				continue
 			}
-			cleaned++
-		} else {
+		} else if isProcessAlive(s.PID) {
 			continue
 		}
+		if err := d.idx.MarkSessionEnded(s.SessionID, now); err != nil {
+			d.logger.Printf("[SESSION-CLEANUP] error ending session %s: %v", s.SessionID, err)
+			continue
+		}
+		cleaned++
 		d.sessionFilesMu.Lock()
 		delete(d.sessionFiles, s.SessionID)
 		d.sessionFilesMu.Unlock()
 	}
 
 	if cleaned > 0 {
-		d.logger.Printf("session cleanup: marked %d stale sessions as crashed", cleaned)
+		d.logger.Printf("session cleanup: marked %d stale sessions as ended", cleaned)
 	}
 }
 
@@ -623,6 +718,20 @@ func segmentSummary(r *store.CompactionResult) string {
 }
 
 // CompactionStatus reports the compaction schedule and the outcome of the last run.
+func (d *Daemon) EnqueueProjection(job gitbridge.ProjectionJob) (int, bool) {
+	if d.projector == nil {
+		return 0, false
+	}
+	return d.projector.Enqueue(job)
+}
+
+func (d *Daemon) ProjectionStatus() map[string]interface{} {
+	if d.projector == nil {
+		return map[string]interface{}{"pending": 0}
+	}
+	return d.projector.Status()
+}
+
 func (d *Daemon) CompactionStatus() map[string]interface{} {
 	d.compactionMu.Lock()
 	defer d.compactionMu.Unlock()
@@ -733,6 +842,11 @@ func (d *Daemon) cleanup() {
 		d.logger.Println("shutdown: watchdog stopped")
 	}
 
+	if d.stopMigration != nil {
+		d.logger.Println("shutdown: pausing store migration...")
+		d.stopMigrationLoop()
+	}
+
 	if d.watcher != nil {
 		d.logger.Println("shutdown: stopping file watcher...")
 		if err := d.watcher.Stop(); err != nil {
@@ -758,6 +872,12 @@ func (d *Daemon) cleanup() {
 		}
 	}
 
+	if d.projector != nil {
+		d.logger.Println("shutdown: waiting for projector...")
+		d.projector.Stop()
+		d.logger.Println("shutdown: projector stopped")
+	}
+
 	// 3. Stop the session registry (stops polling, fires final session-end callbacks
 	// which may append events to the log writer -- this must happen before log close).
 	if d.registry != nil {
@@ -778,6 +898,8 @@ func (d *Daemon) cleanup() {
 		<-d.cleanupDone
 		d.logger.Println("shutdown: session cleanup loop stopped")
 	}
+
+	d.stopScrubLoop()
 
 	if d.stopCompaction != nil {
 		d.logger.Println("shutdown: stopping compaction loop...")

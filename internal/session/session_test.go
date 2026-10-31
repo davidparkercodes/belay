@@ -1086,6 +1086,42 @@ func TestClaudeDetector_DetectFromSessionFiles_NoProjectDir(t *testing.T) {
 	}
 }
 
+func TestClaudeDetector_DetectFromSessionFiles_AcceptsJSONAndJSONL(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	projectRoot := filepath.Join(home, "work", "proj")
+	sessDir := filepath.Join(home, ".claude", "projects", encodeProjectPath(projectRoot))
+	if err := os.MkdirAll(sessDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	for _, name := range []string{"legacy-session.json", "current-session.jsonl", "notes.txt"} {
+		if err := os.WriteFile(filepath.Join(sessDir, name), []byte("{}\n"), 0644); err != nil {
+			t.Fatalf("WriteFile(%s): %v", name, err)
+		}
+	}
+
+	d := NewClaudeDetector(projectRoot)
+	sessions, err := d.detectFromSessionFiles()
+	if err != nil {
+		t.Fatalf("detectFromSessionFiles() returned error: %v", err)
+	}
+
+	got := make(map[string]bool, len(sessions))
+	for _, s := range sessions {
+		got[s.SessionID] = true
+	}
+	for _, want := range []string{"legacy-session", "current-session"} {
+		if !got[want] {
+			t.Errorf("expected session %q to be detected, got %v", want, sessions)
+		}
+	}
+	if len(sessions) != 2 {
+		t.Errorf("expected exactly 2 sessions, got %d", len(sessions))
+	}
+}
+
 // ─── Registry.Attribute with multiple detectors ─────────────────────────────
 
 func TestRegistry_Attribute_MultipleDetectors_TieBreaking(t *testing.T) {

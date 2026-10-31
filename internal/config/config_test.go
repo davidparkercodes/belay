@@ -1098,3 +1098,51 @@ func TestLoad_OnlyCommentsInConfig(t *testing.T) {
 		t.Errorf("API.Port = %d, want default %d", cfg.API.Port, DefaultAPIPort)
 	}
 }
+
+// --- SameRoot tests ---
+
+func TestSameRoot_SymlinkSpelling(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	if err := os.MkdirAll(real, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	if !SameRoot(real, link) {
+		t.Errorf("SameRoot(%q, %q) = false, want true", real, link)
+	}
+	if !sameInode(real, link) {
+		t.Errorf("sameInode(%q, %q) = false, want true (os.SameFile path)", real, link)
+	}
+}
+
+func TestSameRoot_DifferentDirs(t *testing.T) {
+	base := t.TempDir()
+	a := filepath.Join(base, "a")
+	b := filepath.Join(base, "b")
+	for _, d := range []string{a, b} {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+	}
+	if SameRoot(a, b) {
+		t.Errorf("SameRoot(%q, %q) = true, want false", a, b)
+	}
+	if sameInode(a, b) {
+		t.Errorf("sameInode(%q, %q) = true, want false", a, b)
+	}
+}
+
+func TestSameRoot_MissingPathIsNotSame(t *testing.T) {
+	base := t.TempDir()
+	if SameRoot(base, filepath.Join(base, "missing")) {
+		t.Error("SameRoot with a nonexistent path should be false")
+	}
+	if sameInode(base, filepath.Join(base, "missing")) {
+		t.Error("sameInode with a nonexistent path should be false")
+	}
+}

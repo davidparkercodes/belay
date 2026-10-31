@@ -34,6 +34,18 @@ func NewMatcher(projectRoot string) (*Matcher, error) {
 	return m, nil
 }
 
+// NewMatcherFromLines builds a Matcher from gitignore-style lines, without reading
+// any file and without the .belayignore defaults.
+func NewMatcherFromLines(lines []string) *Matcher {
+	m := &Matcher{}
+	for _, line := range lines {
+		if p, ok := parseLine(line); ok {
+			m.patterns = append(m.patterns, p)
+		}
+	}
+	return m
+}
+
 // Reload re-reads the .belayignore file and updates the patterns.
 func (m *Matcher) Reload() error {
 	ignorePath := filepath.Join(m.projectRoot, ".belayignore")

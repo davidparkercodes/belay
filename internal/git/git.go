@@ -528,19 +528,19 @@ func ImportHistory(idx *index.Index, objStore *store.Store, opts ImportOptions) 
 			}
 
 			event := &schema.Event{
-				EventID:       schema.NewEventID(),
-				Version:       schema.SchemaVersion,
-				TimestampNano: commitTime.UnixNano(),
-				FilePath:      filePath,
-				Op:            op,
-				SessionID:     "git-import",
-				Attribution:   schema.AttrManual,
+				EventID:               schema.NewEventID(),
+				Version:               schema.SchemaVersion,
+				TimestampNano:         commitTime.UnixNano(),
+				FilePath:              filePath,
+				Op:                    op,
+				SessionID:             "git-import",
+				Attribution:           schema.AttrManual,
 				AttributionConfidence: 1.0,
 				Metadata: map[string]string{
-					"git_commit": commitHash,
-					"git_author": commitAuthor,
+					"git_commit":  commitHash,
+					"git_author":  commitAuthor,
 					"git_subject": commitSubject,
-					"source":     "git-import",
+					"source":      "git-import",
 				},
 			}
 
@@ -581,7 +581,6 @@ func ImportHistory(idx *index.Index, objStore *store.Store, opts ImportOptions) 
 	return result, nil
 }
 
-
 type stashEntry struct {
 	FilePath    string `json:"file_path"`
 	Op          string `json:"operation"`
@@ -596,10 +595,10 @@ type stashManifestFile struct {
 
 func computeNetChanges(events []*schema.Event) []fileChange {
 	type fileState struct {
-		firstOp      schema.Operation
-		lastOp       schema.Operation
+		firstOp       schema.Operation
+		lastOp        schema.Operation
 		firstPrevHash string
-		lastHash     string
+		lastHash      string
 	}
 
 	files := make(map[string]*fileState)
@@ -608,7 +607,7 @@ func computeNetChanges(events []*schema.Event) []fileChange {
 		state, exists := files[e.FilePath]
 		if !exists {
 			state = &fileState{
-				firstOp:      e.Op,
+				firstOp:       e.Op,
 				firstPrevHash: e.PreviousHash,
 			}
 			files[e.FilePath] = state
@@ -720,6 +719,7 @@ type ProjectOptions struct {
 	Message    string
 	NoMetadata bool
 	DryRun     bool
+	Guard      *SecretGuard
 }
 
 // ProjectResult contains the outcome of a session projection.
@@ -735,6 +735,8 @@ type ProjectResult struct {
 	FilesSkipped  int
 	Message       string
 	Skipped       bool
+	HeldBack      []HeldBackFile `json:"held_back,omitempty"`
+	GuardWarnings []string       `json:"guard_warnings,omitempty"`
 }
 
 // ProjectSession projects a session's net file changes onto TargetRef as a single
@@ -788,28 +790,34 @@ func ProjectSession(idx *index.Index, objStore *store.Store, projectRoot string,
 	}
 
 	result := &ProjectResult{TargetRef: opts.TargetRef, FilesSkipped: skipped}
-	for _, c := range changes {
-		switch c.op {
-		case schema.OpCreate:
-			result.FilesAdded++
-		case schema.OpModify:
-			result.FilesModified++
-		case schema.OpDelete:
-			result.FilesDeleted++
+	finalize := func(held map[string]bool) {
+		result.FilesAdded, result.FilesModified, result.FilesDeleted = 0, 0, 0
+		for _, c := range changes {
+			if held[c.filePath] {
+				continue
+			}
+			switch c.op {
+			case schema.OpCreate:
+				result.FilesAdded++
+			case schema.OpModify:
+				result.FilesModified++
+			case schema.OpDelete:
+				result.FilesDeleted++
+			}
+		}
+		result.Message = opts.Message
+		if result.Message == "" {
+			result.Message = buildCommitMessage(opts.SessionID, &CommitResult{
+				FilesAdded:    result.FilesAdded,
+				FilesModified: result.FilesModified,
+				FilesDeleted:  result.FilesDeleted,
+			})
+		}
+		if !opts.NoMetadata {
+			result.Message = appendBelayTrailers(result.Message, opts.SessionID, events)
 		}
 	}
-
-	result.Message = opts.Message
-	if result.Message == "" {
-		result.Message = buildCommitMessage(opts.SessionID, &CommitResult{
-			FilesAdded:    result.FilesAdded,
-			FilesModified: result.FilesModified,
-			FilesDeleted:  result.FilesDeleted,
-		})
-	}
-	if !opts.NoMetadata {
-		result.Message = appendBelayTrailers(result.Message, opts.SessionID, events)
-	}
+	finalize(nil)
 
 	parent, _ := gitCmd(projectRoot, "rev-parse", "--verify", "--quiet", opts.TargetRef+"^{commit}")
 	result.Parent = parent
@@ -824,6 +832,28 @@ func ProjectSession(idx *index.Index, objStore *store.Store, projectRoot string,
 	result.Base = baseCommit
 
 	if opts.DryRun {
+		if opts.Guard != nil {
+			byPath := make(map[string]string)
+			var paths []string
+			for _, c := range changes {
+				if c.op == schema.OpCreate || c.op == schema.OpModify {
+					byPath[c.filePath] = c.contentHash
+					paths = append(paths, c.filePath)
+				}
+			}
+			held, warnings := opts.Guard.preview(paths, func(path string) ([]byte, error) {
+				return objStore.Get(byPath[path])
+			})
+			result.HeldBack = held
+			result.GuardWarnings = append(append([]string(nil), opts.Guard.Warnings...), warnings...)
+			if len(held) > 0 {
+				heldSet := make(map[string]bool, len(held))
+				for _, h := range held {
+					heldSet[h.Path] = true
+				}
+				finalize(heldSet)
+			}
+		}
 		return result, nil
 	}
 
@@ -859,11 +889,35 @@ func ProjectSession(idx *index.Index, objStore *store.Store, projectRoot string,
 		}
 	}
 
+	baseTree := treeOf(projectRoot, baseCommit)
+	if opts.Guard != nil {
+		held, warnings := opts.Guard.apply(projectRoot, env, baseTree)
+		result.HeldBack = held
+		result.GuardWarnings = append(append([]string(nil), opts.Guard.Warnings...), warnings...)
+		if len(held) > 0 {
+			heldSet := make(map[string]bool, len(held))
+			for _, h := range held {
+				heldSet[h.Path] = true
+			}
+			finalize(heldSet)
+		}
+	}
+
 	tree, err := gitCmdEnv(projectRoot, env, "write-tree")
 	if err != nil {
 		return nil, fmt.Errorf("write-tree: %w", err)
 	}
 	result.Tree = tree
+
+	if len(result.HeldBack) > 0 {
+		if baseTree == "" {
+			baseTree, _ = emptyTree(projectRoot, env)
+		}
+		if tree == baseTree {
+			return &ProjectResult{TargetRef: opts.TargetRef, Skipped: true, FilesSkipped: skipped,
+				Parent: parent, Base: baseCommit, HeldBack: result.HeldBack, GuardWarnings: result.GuardWarnings}, nil
+		}
+	}
 
 	commitArgs := []string{"commit-tree", tree, "-m", result.Message}
 	if baseCommit != "" {
@@ -888,6 +942,7 @@ type ProjectWorkingTreeOptions struct {
 	BaseRef   string
 	Message   string
 	DryRun    bool
+	Guard     *SecretGuard
 }
 
 // ProjectWorkingTree projects a faithful snapshot of the current working tree onto
@@ -939,6 +994,18 @@ func ProjectWorkingTree(projectRoot string, opts ProjectWorkingTreeOptions) (*Pr
 		return nil, fmt.Errorf("stage working tree: %w", err)
 	}
 
+	var held []HeldBackFile
+	var guardWarnings []string
+	if opts.Guard != nil {
+		refCommit := parent
+		if refCommit == "" {
+			refCommit = seedCommit
+		}
+		var warnings []string
+		held, warnings = opts.Guard.apply(projectRoot, env, treeOf(projectRoot, refCommit))
+		guardWarnings = append(append([]string(nil), opts.Guard.Warnings...), warnings...)
+	}
+
 	tree, err := gitCmdEnv(projectRoot, env, "write-tree")
 	if err != nil {
 		return nil, fmt.Errorf("write-tree: %w", err)
@@ -946,11 +1013,11 @@ func ProjectWorkingTree(projectRoot string, opts ProjectWorkingTreeOptions) (*Pr
 
 	if parent != "" {
 		if parentTree, _ := gitCmd(projectRoot, "rev-parse", "--verify", "--quiet", parent+"^{tree}"); parentTree == tree {
-			return &ProjectResult{TargetRef: opts.TargetRef, Skipped: true}, nil
+			return &ProjectResult{TargetRef: opts.TargetRef, Skipped: true, HeldBack: held, GuardWarnings: guardWarnings}, nil
 		}
 	}
 
-	result := &ProjectResult{TargetRef: opts.TargetRef, Tree: tree, Parent: parent, Base: seedCommit}
+	result := &ProjectResult{TargetRef: opts.TargetRef, Tree: tree, Parent: parent, Base: seedCommit, HeldBack: held, GuardWarnings: guardWarnings}
 
 	diffBase := parent
 	if diffBase == "" {
@@ -1017,7 +1084,7 @@ func ProjectWorkingTree(projectRoot string, opts ProjectWorkingTreeOptions) (*Pr
 // PushRef pushes a single refspec to a remote using the repo's configured credentials,
 // bounding a stalled transfer with git's own low-speed abort (no external timeout).
 func PushRef(projectRoot, remote, refspec string) (string, error) {
-	return gitCmd(projectRoot, "-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30", "push", remote, refspec)
+	return gitCmd(projectRoot, "-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30", "push", "--no-verify", remote, refspec)
 }
 
 func submodulePaths(projectRoot string) []string {

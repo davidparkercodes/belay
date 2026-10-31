@@ -3,7 +3,9 @@ package commands
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/davidparkercodes/belay/internal/config"
@@ -52,14 +54,18 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	if jsonOutput {
 		status := map[string]interface{}{
-			"project_root":   projectRoot,
-			"belay_path":     cfg.BelayPath,
-			"daemon_running": daemonRunning,
-			"daemon_pid":     daemonPID,
-			"api_ok":         health.APIOK,
-			"api_port":       health.APIPort,
-			"api_error":      health.APIError,
-			"spooled_events": health.Spooled,
+			"project_root":    projectRoot,
+			"belay_path":      cfg.BelayPath,
+			"daemon_running":  daemonRunning,
+			"daemon_pid":      daemonPID,
+			"api_ok":          health.APIOK,
+			"api_port":        health.APIPort,
+			"api_error":       health.APIError,
+			"spooled_events":  health.Spooled,
+			"spool_set_aside": health.SpoolBad,
+		}
+		if line := scrubNoticeLine(cfg); line != "" {
+			status["agent_logs"] = line
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -87,6 +93,9 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	if health.Spooled > 0 {
 		fmt.Printf("  Queued:  %d event(s) waiting in %s\n", health.Spooled, cfg.SpoolDir())
 	}
+	if health.SpoolBad > 0 {
+		fmt.Printf("  Set aside: %d queued event(s) could not be read (*.json.bad in %s); the daemon retries sealed ones when it starts\n", health.SpoolBad, cfg.SpoolDir())
+	}
 	fmt.Println()
 
 	eventsSize, _ := dirSize(cfg.EventsDir())
@@ -98,9 +107,15 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	fmt.Printf("    Objects: %s\n", humanBytes(objectsSize))
 	fmt.Printf("    Index:   %s\n", humanBytes(indexSize))
 	fmt.Printf("    Total:   %s\n", humanBytes(eventsSize+objectsSize+indexSize))
+	printStoreStatus(cfg)
 	fmt.Println()
 
 	printCompactionStatus(cfg)
+
+	if line := scrubNoticeLine(cfg); line != "" {
+		fmt.Println("  " + line)
+		fmt.Println()
+	}
 
 	return nil
 }
@@ -136,18 +151,25 @@ func printCompactionStatus(cfg *config.Config) {
 
 func dirSize(path string) (int64, error) {
 	var size int64
-	entries, err := os.ReadDir(path)
+	err := filepath.WalkDir(path, func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if p == path {
+				return walkErr
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		size += info.Size()
+		return nil
+	})
 	if err != nil {
 		return 0, err
-	}
-	for _, entry := range entries {
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		if !entry.IsDir() {
-			size += info.Size()
-		}
 	}
 	return size, nil
 }
@@ -178,4 +200,20 @@ func truncateStr(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+func printStoreStatus(cfg *config.Config) {
+	var idx *index.Index
+	if _, err := os.Stat(cfg.IndexPath()); err == nil {
+		if opened, err := index.Open(cfg.IndexPath()); err == nil {
+			idx = opened
+			defer idx.Close()
+		}
+	}
+	st := store.ReadMigrationStatus(idx, cfg.StoreManifestPath())
+	line := storeFormatLine(st)
+	if st.Format == store.FormatEncrypted && st.Migration == store.MigrationPending {
+		line += ", migration " + migrationLine(st)
+	}
+	fmt.Printf("    Store:   %s\n", line)
 }

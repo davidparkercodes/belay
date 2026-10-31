@@ -133,20 +133,22 @@ func TestDirSize_NonexistentDir(t *testing.T) {
 	}
 }
 
-func TestDirSize_IgnoresSubdirectories(t *testing.T) {
+func TestDirSize_CountsSubdirectories(t *testing.T) {
 	dir := t.TempDir()
 
-	// Create a file
 	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("data"), 0644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	// Create a subdirectory with a file (should not be counted)
-	subdir := filepath.Join(dir, "subdir")
-	if err := os.MkdirAll(subdir, 0755); err != nil {
+	// Mirror the sharded object store layout: objects/<2-hex>/<hash>
+	shard := filepath.Join(dir, "ab", "cd")
+	if err := os.MkdirAll(shard, 0755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(subdir, "nested.txt"), []byte("nested data"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "ab", "nested.txt"), []byte("nested data"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(shard, "deep.txt"), []byte("deep"), 0644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -154,8 +156,8 @@ func TestDirSize_IgnoresSubdirectories(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dirSize: %v", err)
 	}
-	if size != 4 { // only "data" (4)
-		t.Errorf("dirSize = %d, want 4 (should ignore subdirectories)", size)
+	if size != 19 { // "data" (4) + "nested data" (11) + "deep" (4)
+		t.Errorf("dirSize = %d, want 19 (subdirectory contents must be counted)", size)
 	}
 }
 

@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -76,7 +77,7 @@ func runRestore(cmd *cobra.Command, args []string) error {
 	}
 	defer idx.Close()
 
-	objStore, err := store.NewStore(cfg.ObjectsDir(), cfg.Storage.CompressionEnabled)
+	objStore, err := openStore(cfg)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
@@ -314,8 +315,8 @@ func writeRestore(objStore *store.Store, cfg *config.Config, projectRoot, filePa
 
 	currentData, readErr := os.ReadFile(absPath)
 	if readErr == nil {
-		currentHash := schema.ContentHashForBytes(currentData)
-		if currentHash == targetEvent.ContentHash {
+		currentHash := objStore.ContentID(currentData)
+		if currentHash == targetEvent.ContentHash || bytes.Equal(currentData, content) {
 			fmt.Println("  Already at target state. Skipped.")
 			return nil
 		}

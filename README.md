@@ -63,10 +63,11 @@ That's it. Belay is now capturing every file change. Go back to work.
 - **Conflict Detection** -- Alerts when multiple sessions edit the same file. Untangle overlapping work between agents with a full attribution trail.
 - **Zero Intrusion** -- Never modifies your tools or slows them down. Watches the filesystem quietly, but when something goes wrong, your AI agent can use Belay directly.
 - **Fully Local** -- All data stays on your machine. No cloud accounts, no sign-ups. A single init command creates your config and starts watching.
+- **Encrypted at Rest** -- Every stored file version is encrypted with a per-user key kept in your OS keychain (or a `0600` key file). Losing the key loses the history: back it up with `belay key export`.
 
 ## How It Works
 
-Belay uses kernel-level filesystem notifications (FSEvents on macOS, fsnotify on Linux/Windows) to watch your project. Every file write is hashed (SHA-256) and stored in a content-addressable object store with gzip compression. An append-only event log and SQLite index make queries fast across thousands of events.
+Belay uses kernel-level filesystem notifications (FSEvents on macOS, fsnotify on Linux/Windows) to watch your project. Every file write is compressed, encrypted (XChaCha20-Poly1305) and stored in a content-addressable object store keyed by an HMAC-SHA256 content id, so the index cannot be used to confirm a guessed secret. An append-only event log and SQLite index make queries fast across thousands of events.
 
 Session attribution works automatically via process-tree heuristics, or with exact precision through hook-based integration with AI tools like Claude Code.
 
@@ -97,6 +98,20 @@ Add the hook to your Claude Code settings (`~/.claude/settings.json`):
 ```
 
 The hook reads tool use JSON from stdin, extracts the file path and session ID, and calls `belay record` in the background. Non-blocking, will not slow down your AI tool. Without hooks, Belay still captures all changes via filesystem watching and uses process-tree heuristics to attribute sessions.
+
+Writes the agent makes through a shell (`cat > file`, `sed -i`, build scripts) never pass through an editing tool, so no `record` call carries their session id; the watcher attributes them to the agent *process* instead (a session named like `claude-pid-1234`). Every `record` and `checkpoint` call now also tells the daemon which agent process it came from, and the daemon links that process session to the tool's session id. From then on the watcher attributes that process's writes to the tool session id directly, and `belay log --session`, `belay diff --session`, `belay restore --session` and `belay project --session` also include the events recorded under the process id before the link was made. To get the link as early as possible, run the same hook on `SessionStart` too (it only links there, it records nothing):
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "/path/to/belay/hooks/belay-hook.sh" } ] }
+    ]
+  }
+}
+```
+
+Any tool can do the same with `belay sessions link <session-id>` (the agent PID is found by walking up from the calling process, or pass `--pid`) or `POST /api/sessions/link`.
 
 #### Pre-bash safety net (catches what `/rewind` misses)
 
@@ -148,6 +163,39 @@ curl -X POST "http://127.0.0.1:$(cat .belay/daemon.port)/api/record" \
 
 Or let the CLI find the right daemon for you: `belay record <path> --session <id> --tool <name>`. It accepts absolute paths or paths relative to the current directory, records into the project that contains the file, and if the daemon is down it queues the event in `.belay/spool/` and starts the daemon (set `BELAY_NO_AUTOSTART=1` to disable).
 
+### Git projection
+
+`belay project` turns Belay history into git history without ever touching your working tree, index or HEAD: it builds one commit per session from the session's net changes (plus, by default, a reconcile snapshot of the working tree) and appends it to `refs/heads/belay-history` through git plumbing. Pair it with a `Stop` hook and git becomes an automatic, write-only projection of what your agents did.
+
+```bash
+belay project --session <id> --push origin          # sync with origin, project, push (retries if rejected)
+belay project --session <id> --push origin --queue  # hand it to the daemon and return immediately
+belay project --working-tree --push origin          # reconcile only (no session attribution needed)
+belay project --status                              # the daemon's queue and recent results
+```
+
+With `--push`, the remote is the source of truth. Before projecting, the local ref is fast-forwarded to the remote's copy, and if the two diverged (another machine projected onto the same ref) the local-only projection commits are replayed on top of the remote tip, keeping their trees, messages, authors and dates. A push that is still rejected re-syncs and retries. With `--queue`, the running daemon executes jobs one at a time on a background queue, coalescing identical pending jobs, so any number of hooks can hand off work without serializing on a lock; if the daemon is unavailable the job runs inline instead. Defaults for the remote, ref and reconcile come from `[projection]` in `.belay/config.toml`.
+
+#### Secrets are held back
+
+Before writing the tree, every projection (session, working-tree reconcile, and the daemon queue) scans the net content of each changed file. A file that looks like it holds a credential is left out of that commit: a new file is not added, a modified file stays at its previously projected version, and deletions still project. The commit still happens, and when the secret is gone the next projection includes the file again. One line goes to stderr, and `--json` output and `belay project --status` carry a `held_back` list of paths and rule names (never the secret):
+
+```
+belay: held back 2 file(s) with likely credentials: config/prod.yml, notes.md (allow with .belayallow)
+```
+
+To allow something, add a `.belayallow` file at the project root. Path lines use gitignore syntax, and `rule:<name>` lines switch a detector rule off for the project (unknown rule names are reported and ignored):
+
+```
+test/fixtures/
+docs/examples/*.env
+rule:jwt
+```
+
+`belay project --allow-secrets` projects everything for one run (it is passed through `--queue` to the daemon), and `[projection] hold_back_secrets = false` turns the check off. Binary files and files over 8 MiB are not scanned. If the detector fails on a file, the file is projected as before and a warning is printed, so the check can never stall projection. Held-back content may still exist as an unreferenced object in the local `.git` until git garbage-collects it; it is never part of a commit or a push.
+
+If several machines share one checkout but have different working trees, give each its own ref (for example `ref = "refs/heads/belay-history/<machine>"`) so their reconcile snapshots do not undo each other.
+
 ## CLI Reference
 
 | Command | Description |
@@ -164,14 +212,19 @@ Or let the CLI find the right daemon for you: `belay record <path> --session <id
 | `belay diff` | View changes between time points or sessions |
 | `belay restore` | Recover files by time, event, or session |
 | `belay sessions` | List and inspect AI sessions |
+| `belay sessions link` | Tie the calling agent process to its tool session id (used by hooks) |
 | `belay replay` | Replay a session's changes as diffs or patches |
 | `belay conflicts` | Detect overlapping modifications across sessions |
 | `belay commit` | Generate a git commit from a session |
-| `belay project` | Project a session onto a git ref via plumbing (no working-tree mutation; concurrency-safe) |
+| `belay project` | Project a session onto a git ref via plumbing (no working-tree mutation; concurrency-safe). `--push <remote>` syncs with the remote first and retries a rejected push; `--queue` hands the job to the daemon; `--status` shows the daemon's queue |
 | `belay snapshot` | Reconstruct project state at any point in time |
 | `belay checkpoint` | Mark a labeled, restorable point in time (pairs with `restore --to-checkpoint`) |
 | `belay checkpoints` | List recorded checkpoints |
 | `belay gc` | Garbage collection and storage compaction |
+| `belay key status` | Where the store key lives, its id, and the store's encryption and migration progress |
+| `belay key export` / `import` | Back up the store key, or install it on another machine (`--force` replaces a different key) |
+| `belay key migrate` | Encrypt a legacy store now (the daemon otherwise does it in the background) |
+| `belay scrub` | Redact credentials from idle AI agent session logs (`--dry-run`, `--json`, `--undo <log>`, `--all-idle`) |
 
 ## API Endpoints
 
@@ -192,6 +245,9 @@ Requests may send `X-Belay-Project: <absolute project root>`. A daemon that serv
 | POST | `/api/record` | Push file event from hook |
 | POST | `/api/checkpoint` | Record a labeled checkpoint marker |
 | GET | `/api/checkpoints` | List recorded checkpoints |
+| POST | `/api/sessions/link` | Link an agent process (`pid`) to its tool `session_id` |
+| POST | `/api/project` | Queue a projection job (`session_id`, `working_tree`, `remote`, `ref`) on the daemon |
+| GET | `/api/project/status` | Projector queue, running job and recent results |
 | GET | `/api/stream` | SSE real-time event stream |
 
 ## Configuration
@@ -209,6 +265,9 @@ max_file_size_mb = 50
 [storage]
 compression_enabled = true
 
+[store]
+encryption = true     # encrypt stored objects (turning it off later does not decrypt old ones)
+
 [retention]
 hot_hours = 24        # full fidelity
 warm_days = 7         # hourly granularity (last modify per file/session/hour)
@@ -223,11 +282,55 @@ compact_segments = true        # rewrite sealed event-log segments so purged eve
 port = 33412          # preferred port; falls back to a free one if taken (see .belay/daemon.port)
 host = "127.0.0.1"
 
+[projection]
+remote = ""                       # remote that `belay project` syncs with and pushes to ("" = local ref only)
+ref = "refs/heads/belay-history"  # ref that receives projection commits
+base_ref = "HEAD"                 # ref the projection branch is bootstrapped from
+working_tree = true               # follow each session projection with a working-tree reconcile snapshot
+hold_back_secrets = true          # leave files with likely credentials out of projection commits
+
 [safety]
 allow_writes = false  # dry-run mode until you're ready
+
+[scrub]
+mode = "notice"       # agent logs: "off", "notice" (one line in belay status) or "auto" (daemon redacts idle logs)
 ```
 
 All settings have sensible defaults. `belay init` generates a config with defaults. `safety.allow_writes` defaults to false so destructive commands (restore, replay, commit) show what they'd do without writing. Set to `true` once you trust the setup.
+
+## Encryption at rest
+
+Belay encrypts every object it stores, not only files that look sensitive. One 32-byte key per user is shared by all your Belay projects. It lives in the macOS Keychain or the Linux Secret Service (through the `security` and `secret-tool` CLIs) and falls back silently to `<user config dir>/belay/store.key` (mode `0600`) when no keychain is available. `BELAY_KEY_FILE` points Belay at a specific key file and skips the keychain.
+
+**Losing the key loses the history.** There is no recovery. Back it up with `belay key export --out FILE` and restore it on a new machine with `belay key import FILE`.
+
+Stores created before encryption are migrated in place by the daemon, in the background and resumably. Old objects stay readable during the migration, and no unencrypted object is deleted until its encrypted copy has been read back and compared byte for byte. `belay key status` and `belay status` show progress.
+
+Encryption protects copies of `.belay/` that leave your session: backups, cloud sync, copied or stolen disks, and other tools that scan plain text on disk. It does not protect against malware or anyone running as your user, who can read the keychain or key file, and the local API still serves decrypted content to local callers.
+
+## Agent log scrub
+
+Agent session logs (Claude Code transcripts today) keep a plain-text copy of anything pasted into a chat: API keys, tokens, an app password typed into a sentence. Those logs belong to the agent, not to Belay, so Belay only offers to clean them up.
+
+```bash
+belay scrub --dry-run          # which logs have findings, counts per rule, nothing changed
+belay scrub                    # redact every idle log for this project
+belay scrub --undo <log>       # put the original back, byte-exact
+belay scrub --all-idle         # also idle logs of the agent's other projects
+```
+
+- Only idle logs are touched: no write in the last 30 minutes and not an active Belay session, because agents read their own logs to resume.
+- Each finding becomes `[redacted:<rule>]`. JSONL lines are redacted inside their JSON string values and only those strings are re-encoded, so every line stays valid JSON; other lines are redacted as text. Output shows counts per rule, never the secret.
+- Before a log is rewritten, its original bytes go into Belay's encrypted store (kept from garbage collection) and a record goes to `.belay/scrub/backups.jsonl`. `--undo` restores them byte-exact; lines the agent appended after the scrub are kept after the original. The rewrite goes through a temp file and rename, keeps the file mode and modification time, and is abandoned if the log changes while it runs.
+- Scrub needs store encryption on, since it would otherwise keep the originals in plain text.
+
+`[scrub] mode` decides what happens without you asking:
+
+- `notice` (default): `belay status` shows one line when this project's logs hold findings, for example `3 credentials in plain text in agent logs. Run belay scrub to redact.` Counts are cached by log path, size and modification time, and status never spends more than a fraction of a second scanning; it shows nothing rather than wait.
+- `auto`: the daemon redacts idle logs every 15 minutes, with a cap on how much it reads per round, and never redoes a scrub you undid. `belay status` stays silent unless a round failed.
+- `off`: nothing.
+
+`belay init` asks one question about this, default No (`notice`). `belay init --scrub auto|notice|off` sets it without asking.
 
 ## Running as a service
 
