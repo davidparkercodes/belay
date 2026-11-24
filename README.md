@@ -37,7 +37,7 @@ brew install davidparkercodes/tap/belay
 go install github.com/davidparkercodes/belay/cmd/belay@latest
 ```
 
-**Pre-built Binaries** -- Download from the [Releases page](https://github.com/davidparkercodes/belay/releases).
+**Pre-built Binaries** -- Download from the [Releases page](https://github.com/davidparkercodes/belay/releases). The macOS binaries are not yet signed or notarized. The install script and Homebrew handle this for you; for a manual download, clear the quarantine flag with `xattr -d com.apple.quarantine ./belay` before running it.
 
 **Build from Source**
 ```bash
@@ -178,7 +178,17 @@ belay checkpoint --label "before refactor" --reason "about to move 30 files"
 
 ### Any Tool
 
-For AI tools that don't support hooks, or custom integrations, push change events directly via the REST API:
+Belay does not need an integration to protect your work. The watcher captures every write from any editor, agent or script, and process-tree detection attributes changes to Cursor, GitHub Copilot, Windsurf and Aider without setup. Integrations only make attribution exact and add checkpoints, and they all go through three CLI calls any agent hook system can run:
+
+| Agent hook | Command |
+|------------|---------|
+| After the agent writes a file | `belay record <path> --session <id> --tool <name>` |
+| Before the agent runs a shell command | `belay checkpoint --label "pre-bash: <command>" --session <id> --tool <name> --quiet` |
+| When a session starts | `belay sessions link <session-id> --pid <agent-pid>` (the PID is found automatically under Claude Code) |
+
+`belay ai-instructions` prints a short block to paste into the agent's instructions file so the agent itself knows to reach for `belay log`, `belay diff` and `belay restore`.
+
+For custom integrations, push change events directly via the REST API:
 
 ```bash
 curl -X POST "http://127.0.0.1:$(cat .belay/daemon.port)/api/record" \
@@ -228,9 +238,12 @@ If several machines share one checkout but have different working trees, give ea
 |---------|-------------|
 | `belay init` | Initialize `.belay/` in the current directory |
 | `belay remove` | Remove Belay from the current directory (opposite of init) |
-| `belay daemon start` | Start the background watcher daemon |
-| `belay daemon stop` | Stop the daemon |
-| `belay service install` | Run the daemon under launchd (macOS) or systemd (Linux) so it survives reboots |
+| `belay daemon start` / `stop` / `restart` / `status` | Manage the background watcher daemon |
+| `belay service install` / `status` / `uninstall` | Run the daemon under launchd (macOS) or systemd (Linux) so it survives reboots |
+| `belay hook init` / `install` | Shell hook that starts the daemon when you `cd` into a Belay project |
+| `belay git-hooks install` / `remove` / `status` | Git hooks that report checkout, merge and rewrite operations to Belay |
+| `belay ai-instructions` | Print a block to paste into your agent's instructions file (CLAUDE.md, .cursorrules, .windsurfrules and similar) |
+| `belay record` | Record a file change with session attribution (used by hooks; queues and starts the daemon if it is down) |
 | `belay status` | System, daemon and API overview |
 | `belay status --scan <dir>` | Health-check every Belay project under a directory (exits 1 if any is down) |
 | `belay log` | Browse event history with filters |
@@ -246,7 +259,8 @@ If several machines share one checkout but have different working trees, give ea
 | `belay snapshot` | Reconstruct project state at any point in time |
 | `belay checkpoint` | Mark a labeled, restorable point in time (pairs with `restore --to-checkpoint`) |
 | `belay checkpoints` | List recorded checkpoints |
-| `belay gc` | Garbage collection and storage compaction |
+| `belay gc` | Garbage collection and storage compaction (`--purge-ignored` drops history of newly ignored files) |
+| `belay rebuild-index` | Rebuild the SQLite index from the append-only event log (daemon stopped) |
 | `belay key status` | Where the store key lives, its id, and the store's encryption and migration progress |
 | `belay key export` / `import` | Back up the store key, or install it on another machine (`--force` replaces a different key) |
 | `belay key migrate` | Encrypt a legacy store now (the daemon otherwise does it in the background) |
